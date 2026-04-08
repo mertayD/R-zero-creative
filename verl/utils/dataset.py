@@ -95,6 +95,7 @@ class RLHFDataset(Dataset):
         max_pixels: Optional[int] = None,
         min_pixels: Optional[int] = None,
         filter_overlong_prompts: bool = True,
+        max_samples: Optional[int] = None,
     ):
         self.tokenizer = tokenizer
         self.processor = processor
@@ -126,7 +127,7 @@ class RLHFDataset(Dataset):
             with open(format_prompt, encoding="utf-8") as f:
                 self.format_prompt = f.read()
 
-        if "questioner_format_with_persona" in self.format_prompt:
+        if self.format_prompt and "questioner_format_with_persona" in self.format_prompt:
             print("load personas")
             personas_dataset = load_dataset("proj-persona/PersonaHub", "math", split="train")
             self.personas = [item['input persona'] for item in personas_dataset]
@@ -134,9 +135,13 @@ class RLHFDataset(Dataset):
         if self.filter_overlong_prompts:
             self.dataset = self.dataset.filter(self._filter_overlong_prompts, desc="Filtering overlong prompts")
 
+        if max_samples is not None and len(self.dataset) > 0:
+            n = min(max_samples, len(self.dataset))
+            self.dataset = self.dataset.select(range(n))
+
     def _build_messages(self, example: Dict[str, Any]) -> List[Dict[str, Any]]:
         prompt_str: str = example[self.prompt_key]
-        if "questioner_format_with_persona" in self.format_prompt:
+        if self.format_prompt and "questioner_format_with_persona" in self.format_prompt:
             print("load personas")
             return [
                 {
@@ -164,7 +169,7 @@ class RLHFDataset(Dataset):
                     )
                 }
             ]
-        if "questioner_format" in self.format_prompt:
+        if self.format_prompt and "questioner_format" in self.format_prompt:
             # print('detected questioner_format')
             return [
                 {
@@ -192,7 +197,7 @@ class RLHFDataset(Dataset):
                     )
                 }
             ]
-        if "solver_format" in self.format_prompt:
+        if self.format_prompt and "solver_format" in self.format_prompt:
             return [{"role": "system", "content": r"Please reason step by step, and put your final answer within \boxed{}."},{"role": "user", "content": prompt_str}]
         if self.format_prompt:
             format_prompt = Template(self.format_prompt.strip())

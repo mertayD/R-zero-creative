@@ -21,6 +21,14 @@ import numpy as np
 import psutil
 import torch
 import torch.distributed as dist
+
+try:
+    import flash_attn  # noqa: F401
+    _FLASH_ATTN_AVAILABLE = True
+except ImportError:
+    _FLASH_ATTN_AVAILABLE = False
+
+_ATTN_IMPL = "flash_attention_2" if _FLASH_ATTN_AVAILABLE else "sdpa"
 from copy import deepcopy
 from accelerate import init_empty_weights
 from codetiming import Timer
@@ -201,7 +209,7 @@ class FSDPWorker(Worker):
                 model_config.model_path,
                 config=self.model_config,
                 torch_dtype='bfloat16',
-                attn_implementation="flash_attention_2",
+                attn_implementation=_ATTN_IMPL,
                 device_map="cpu" if fsdp_config.enable_rank0_init else "cuda",
                 low_cpu_mem_usage=True,
                 trust_remote_code=model_config.trust_remote_code,
@@ -211,7 +219,7 @@ class FSDPWorker(Worker):
                 model = auto_class.from_config(
                     self.model_config,
                     torch_dtype='bfloat16',
-                    attn_implementation="flash_attention_2",
+                    attn_implementation=_ATTN_IMPL,
                     trust_remote_code=model_config.trust_remote_code,
                 )
 

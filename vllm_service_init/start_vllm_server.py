@@ -107,6 +107,12 @@ def grade_answer_with_timeout(res1, res2):
 # ---------------------------- Flask Application --------------------------- #
 app = Flask(__name__)
 
+@app.route('/health', methods=['GET'])
+def health():
+    """Simple liveness probe – returns 200 once the server (and vLLM) are ready."""
+    return jsonify({'status': 'ok'}), 200
+
+
 @app.route('/hello', methods=['GET'])
 def hello():
     '''The main processing endpoint: reads a task file, invokes vLLM, consolidates answers, and writes results.'''

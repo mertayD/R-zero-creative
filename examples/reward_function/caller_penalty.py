@@ -75,10 +75,11 @@ def split_list(lst, n=4):
     k, m = divmod(len(lst), n)
     return [lst[i*k + min(i, m):(i+1)*k + min(i+1, m)] for i in range(n)]
 
-os.environ["NO_PROXY"] = "0.0.0.0,127.0.0.1"
+# Use loopback for client calls; 0.0.0.0 is a bind address and can fail name resolution.
+os.environ["NO_PROXY"] = "127.0.0.1,localhost,0.0.0.0"
 
 def fetch(index,i):
-    response = requests.get(f"http://0.0.0.0:{5000+index}/hello?name={i}")
+    response = requests.get(f"http://127.0.0.1:{5000+index}/hello?name={i}")
     print(response)
     return True
 
@@ -121,13 +122,14 @@ def compute_score(predicts: List[str], ground_truths: List[str], format_weight: 
         json.dump(predicts,f,indent=4)
     for i in range(len(predicts)):
         questions = re.findall(r"<question>(.*?)</question>", predicts[i], re.DOTALL)
-        answers = extract_boxed_content(predicts[i])
-        if questions and answers:
+        # extract_boxed_content returns a single string (or None), not a list
+        answer_str = extract_boxed_content(predicts[i])
+        if questions and answer_str:
             try:
                 question = questions[-1].strip()
-                answer = answers[-1].strip()
+                answer = answer_str.strip()
                 results.append({"question": question, "answer": answer})
-            except:
+            except Exception:
                 results.append({"question": "", "answer": ""})
         else:
             results.append({"question": "", "answer": ""})

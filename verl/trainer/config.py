@@ -49,6 +49,9 @@ class DataConfig:
     max_pixels: int = 4194304
     min_pixels: int = 262144
     filter_overlong_prompts: bool = True
+    # If set, cap dataset size after filtering (smoke tests / debugging).
+    max_train_samples: Optional[int] = None
+    max_val_samples: Optional[int] = None
 
     def post_init(self):
         if self.format_prompt is not None:

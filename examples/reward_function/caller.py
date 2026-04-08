@@ -32,10 +32,10 @@ def split_list(lst, n=4):
     k, m = divmod(len(lst), n)
     return [lst[i*k + min(i, m):(i+1)*k + min(i+1, m)] for i in range(n)]
 
-os.environ["NO_PROXY"] = "0.0.0.0,127.0.0.1"
+os.environ["NO_PROXY"] = "127.0.0.1,localhost,0.0.0.0"
 
 def fetch(index,i):
-    response = requests.get(f"http://0.0.0.0:{5000+index}/hello?name={i}")
+    response = requests.get(f"http://127.0.0.1:{5000+index}/hello?name={i}")
     print(response)
     return True
 

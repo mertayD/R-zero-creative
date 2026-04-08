@@ -46,6 +46,19 @@ plt.savefig('scores_distribution.png')
 if not args.repo_name == "":
     filtered_datas = [{'problem':data['question'],'answer':data['answer'],'score':data['score']} for data in datas if data['score'] >= args.min_score and data['score'] <= args.max_score and data['answer'] != '' and data['answer']!= 'None']
     print(len(filtered_datas))
+    if len(filtered_datas) == 0:
+        n = len(datas)
+        if n == 0:
+            raise SystemExit(
+                "upload.py: no evaluation results found under "
+                f"{STORAGE_PATH}/generated_question/{args.experiment_name}_*_results.json — "
+                "run question generation + evaluate first."
+            )
+        raise SystemExit(
+            "upload.py: after score filter "
+            f"[{args.min_score}, {args.max_score}] and non-empty answers, 0 rows remain "
+            f"(had {n} evaluated rows). Widen --min_score/--max_score or fix evaluation."
+        )
     train_dataset = Dataset.from_list(filtered_datas)
     dataset_dict = {"train": train_dataset}
     config_name = f"{args.experiment_name}"
