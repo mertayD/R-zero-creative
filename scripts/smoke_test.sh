@@ -9,12 +9,19 @@
 #   SMOKE_MAX_TRAIN_SAMPLES, SMOKE_MAX_VAL_SAMPLES, SMOKE_ROLLOUT_BATCH_SIZE,
 #   SMOKE_VAL_BATCH_SIZE, SMOKE_GLOBAL_BATCH_SIZE, SMOKE_QUESTIONER_MAX_STEPS,
 #   SMOKE_SOLVER_MAX_STEPS, SMOKE_QUESTIONS_PER_GPU
+#
+# Solver train Hub size = N_TRAIN (default 8). Generate at least 8 questions per GPU
+# (64 total) so evaluation/filtering usually still yields >= N_TRAIN rows.
 # =============================================================================
 
 set -euo pipefail
 
 # Smoke run: no Weights & Biases network calls (avoids flaky DNS / long-run Modal log stream issues).
 export WANDB_MODE="${WANDB_MODE:-disabled}"
+
+# Corrupt TorchInductor autotune JSON under /tmp can crash vLLM's compilation backend
+# (BackendCompilerFailed / JSONDecodeError). Clear stale caches each smoke run.
+rm -rf /tmp/torchinductor_root /tmp/tinductor_* 2>/dev/null || true
 
 Base_model="$1"
 Model_abbr="$2"
@@ -29,7 +36,7 @@ VB="${SMOKE_VAL_BATCH_SIZE:-8}"
 GBS="${SMOKE_GLOBAL_BATCH_SIZE:-8}"
 Q_STEPS="${SMOKE_QUESTIONER_MAX_STEPS:-2}"
 S_STEPS="${SMOKE_SOLVER_MAX_STEPS:-4}"
-Q_PER_GPU="${SMOKE_QUESTIONS_PER_GPU:-3}"
+Q_PER_GPU="${SMOKE_QUESTIONS_PER_GPU:-8}"
 Q_MERGE=$((Q_STEPS - 1))
 S_MERGE=$((S_STEPS - 1))
 
@@ -39,7 +46,8 @@ echo " Base model : $Base_model"
 echo " Abbreviation: $Model_abbr"
 echo " Storage    : $STORAGE_PATH"
 echo " Train cap  : $N_TRAIN rows | rollout_batch=$RB | questioner_steps=$Q_STEPS"
-echo " Solver     : max_steps=$S_STEPS | questions_per_gpu=$Q_PER_GPU"
+echo " Solver     : max_steps=$S_STEPS | questions_per_gpu=$Q_PER_GPU (total gen $((Q_PER_GPU * 8)))"
+echo " Hub train  : exactly $N_TRAIN rows after upload (matches max_train_samples / batch sizes)"
 echo "=========================================================="
 
 # ---------------------------------------------------------------------------
@@ -91,6 +99,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main \
     trainer.n_gpus_per_node=4 \
     data.format_prompt=./examples/format_prompt/questioner.jinja \
     worker.rollout.n=2 \
+    worker.rollout.enforce_eager=true \
+    worker.actor.use_torch_compile=false \
     worker.actor.global_batch_size="$GBS" \
     worker.actor.micro_batch_size_per_device_for_update=1 \
     worker.actor.micro_batch_size_per_device_for_experience=1 \
@@ -115,8 +125,20 @@ echo "vLLM servers stopped"
 echo ""
 echo ">>> STEP 2 / 2 — Train solver v1"
 
+if [ -z "${HUGGINGFACENAME:-}" ]; then
+    echo "[ERROR] HUGGINGFACENAME is not set. Set it in .env / Modal secret (HF dataset repo owner for upload + train_files)."
+    exit 1
+fi
+
 SOLVER_SAVE="${Model_abbr}_solver_v1"
 QUESTIONER_HF="${STORAGE_PATH}/models/${QUESTIONER_SAVE}/global_step_${Q_MERGE}/actor/huggingface"
+
+if [ ! -d "$QUESTIONER_HF" ]; then
+    echo "[ERROR] Merged questioner checkpoint not found (needed for question generation):"
+    echo "        $QUESTIONER_HF"
+    echo "        Check trainer.max_steps vs Q_MERGE (global_step_${Q_MERGE})."
+    exit 1
+fi
 
 # --- 2a. Generate questions (SMOKE_QUESTIONS_PER_GPU × 8 GPUs)
 echo "  2a. Generating questions..."
@@ -135,7 +157,8 @@ python question_evaluate/upload.py \
     --repo_name  "$SOLVER_SAVE" \
     --max_score  1.0 \
     --min_score  0.0 \
-    --experiment_name "$SOLVER_SAVE"
+    --experiment_name "$SOLVER_SAVE" \
+    --train_rows "$N_TRAIN"
 
 # --- 2d. Train solver on the generated questions ---
 echo "  2d. Training solver..."
@@ -156,6 +179,8 @@ python3 -m verl.trainer.main \
     data.format_prompt=./examples/format_prompt/solver.jinja \
     trainer.val_freq=-1 \
     trainer.n_gpus_per_node=8 \
+    worker.rollout.enforce_eager=true \
+    worker.actor.use_torch_compile=false \
     worker.actor.global_batch_size="$GBS" \
     worker.actor.micro_batch_size_per_device_for_update=1 \
     worker.actor.micro_batch_size_per_device_for_experience=1 \

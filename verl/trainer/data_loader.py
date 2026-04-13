@@ -47,6 +47,10 @@ def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, proces
     else:
         sampler = SequentialSampler(data_source=train_dataset)
 
+    # drop_last=True yields zero batches when len(dataset) < rollout_batch_size
+    # (common for smoke runs on tiny HF train splits).
+    _train_n = len(train_dataset)
+    _drop_last = _train_n > config.rollout_batch_size
     train_dataloader = StatefulDataLoader(
         dataset=train_dataset,
         batch_size=config.rollout_batch_size,
@@ -54,7 +58,7 @@ def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, proces
         num_workers=8,
         collate_fn=collate_fn,
         pin_memory=False,
-        drop_last=True,
+        drop_last=_drop_last,
     )
 
     val_dataset = RLHFDataset(

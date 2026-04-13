@@ -1,104 +1,128 @@
-# Modal smoke experiment — context
+# Modal smoke experiment — guide and findings
 
-This document describes how the **R-Zero end-to-end smoke run** was wired to **Modal**, what differs from the stock README/`main.sh` workflow, and operational notes. It is meant as **handoff context** for future runs and debugging.
+This document describes the **R-Zero end-to-end smoke run** on **Modal**: how to start it, the **workflow** inside the container, **storage**, and **issues we hit** (and how they were fixed). Use it for handoff, reruns, and debugging.
 
 ---
 
 ## What this is (and is not)
 
-- **Goal:** Run **one** full R-Zero iteration (questioner → merge → generate/evaluate/upload → solver → merge → optional GSM8K check) on **small data** to validate the pipeline before scaling.
-- **Implementation:** A **new** script [`scripts/smoke_test.sh`](../scripts/smoke_test.sh) mirrors the **stages** of the paper/README loop, not a direct call to [`scripts/main.sh`](../scripts/main.sh). `main.sh` runs **five** iterations; the smoke path runs **one**.
-- **Upstream:** The original open-source repo does **not** ship Modal code. [`modal_run.py`](../modal_run.py) is **project-local** glue: image, volume, secrets, and a single GPU function that invokes `smoke_test.sh`.
-
----
-
-## Repository additions and touched files
-
-| Piece | Role |
-|--------|------|
-| [`modal_run.py`](../modal_run.py) | Modal `App`, container image, `run_smoke_test` function, local entrypoint |
-| [`scripts/smoke_test.sh`](../scripts/smoke_test.sh) | Bash orchestration for one iteration + env-driven scale |
-| [`scripts/modal_run_smoke_detach.sh`](../scripts/modal_run_smoke_detach.sh) | Thin wrapper: `modal run --detach modal_run.py "$@"` |
-| [`verl/trainer/config.py`](../verl/trainer/config.py) | `max_train_samples` / `max_val_samples` on `DataConfig` |
-| [`verl/utils/dataset.py`](../verl/utils/dataset.py) | Optional cap after filtering; safer `format_prompt` guards |
-| [`verl/trainer/data_loader.py`](../verl/trainer/data_loader.py) | Passes sample caps into `RLHFDataset` |
-| [`examples/reward_function/caller_penalty.py`](../examples/reward_function/caller_penalty.py) | Reward HTTP to **127.0.0.1**; fix for `extract_boxed_content` (string vs list) |
-| [`examples/reward_function/caller.py`](../examples/reward_function/caller.py) | Same **127.0.0.1** client URL as `caller_penalty.py` |
-| [`vllm_service_init/start_vllm_server.py`](../vllm_service_init/start_vllm_server.py) | **`GET /health`** for readiness probes |
-| [`verl/workers/fsdp_workers.py`](../verl/workers/fsdp_workers.py) | `flash_attn` optional → `sdpa` fallback |
-| [`requirements.txt`](../requirements.txt) | `stopit` (used by scripts) |
+- **Goal:** Run **one** full R-Zero iteration (questioner → merge → generate / evaluate / upload → solver → merge → optional GSM8K check) on **small data** to validate the pipeline before scaling.
+- **Implementation:** [`scripts/smoke_test.sh`](../scripts/smoke_test.sh) mirrors the **stages** of the paper/README loop. [`scripts/main.sh`](../scripts/main.sh) runs **five** iterations; smoke runs **one**.
+- **Modal glue:** [`modal_run.py`](../modal_run.py) defines the image, volume, secrets, and a single GPU function that invokes `smoke_test.sh`. The upstream R-Zero repo does not ship Modal code.
 
 ---
 
 ## Prerequisites
 
-1. **Modal:** CLI logged in; workspace/profile used for this project (e.g. `columbia-daplab` via `MODAL_PROFILE` in `.env`).
-2. **`.env`** (gitignored): volume name, GPU string, paths, `HUGGINGFACENAME`, timeouts, **no need to commit secrets**. [`modal_run.py`](../modal_run.py) uses `python-dotenv` at import time **locally**.
-3. **`tokens.json`** (local, gitignored recommended): `huggingface` and `wandb` keys. Read **only when `modal.is_local()`** so container import does not require `tokens.json` in `/root`.
-4. **Modal secret:** At runtime the container expects **`HF_TOKEN`**, **`WANDB_API_KEY`**, **`HUGGINGFACENAME`**, **`STORAGE_PATH`** via `modal.Secret.from_dict` built from local `tokens.json` + `.env` when you deploy/run from your machine. Align secret name with your Modal dashboard if you use a named secret instead.
-5. **Volume:** `modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)` — checkpoints, generated questions, HF cache, temp results live under `REMOTE_STORAGE_PATH` (default `/storage`).
+1. **Modal CLI** logged in; workspace/profile for this project (e.g. `MODAL_PROFILE=columbia-daplab` in [`.env`](../.env)).
+2. **`.env`** (gitignored): `APP_NAME`, `VOLUME_NAME`, `MODAL_FULL_GPU`, `REMOTE_REPO_PATH`, `REMOTE_STORAGE_PATH`, **`HUGGINGFACENAME`** (HF username/org for dataset repos — **required** for solver upload + `data.train_files`), timeouts. [`modal_run.py`](../modal_run.py) loads it with `python-dotenv` **locally**.
+3. **`tokens.json`** (local, gitignored): `huggingface` and `wandb` keys. Read **only when `modal.is_local()`**; the container gets **`HF_TOKEN`** / **`WANDB_API_KEY`** from the Modal secret.
+4. **Modal secret / env:** At runtime the container needs **`HUGGINGFACENAME`**, **`STORAGE_PATH`**, and HF/W&B tokens. `modal_run.py` builds `modal.Secret.from_dict` from local `tokens.json` + env when you run from your machine.
+5. **Volume:** `modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)` — artifacts under **`REMOTE_STORAGE_PATH`** (default **`/storage`**).
 
 ---
 
-## How the Modal run works
+## How to start a run
 
-1. **Image:** `nvidia/cuda:12.6.0-devel-ubuntu22.04` + Python 3.10; PyTorch cu126 wheels; `vllm==0.9.1`; optional `flash-attn` after `pip install wheel`; extra pip deps including `ray`, `wandb`, `mathruler`, `codetiming`, etc. Repo mounted with `add_local_dir(..., copy=False)` and ignore rules for `.git`, `__pycache__`, `.env`.
-2. **Function:** Single `@app.function` with **`gpu=MODAL_FULL_GPU`** (default **`A100-40GB:8`**), attached volume at **`/storage`**, long **`timeout`**, training-friendly `env` (including **`NO_PROXY`/`no_proxy`** for local vLLM HTTP).
-3. **Inside the container:** `cd` to `REMOTE_REPO_PATH`, ensure dirs under `$STORAGE_PATH`, set **`HF_HOME`** / **`HUGGINGFACE_HUB_CACHE`** to **`/storage/hf_cache`** so model downloads persist on the volume, then:
-
-   ```bash
-   bash scripts/smoke_test.sh <base_model> <abbr>
-   ```
-
-4. **After success:** `volume.commit()` writes new artifacts to the persistent volume.
-
----
-
-## Smoke scale defaults (why 8 rows and batch 8)
-
-- **`SMOKE_MAX_TRAIN_SAMPLES` / `SMOKE_MAX_VAL_SAMPLES`:** default **8** — small, and matches **`rollout_batch_size=8`** with `drop_last=True` in the dataloader (one full batch per epoch from the capped set).
-- **`SMOKE_ROLLOUT_BATCH_SIZE` (and val / global):** default **8** — **required** for verl’s `DataProto.chunk(chunks=world_size)`:
-  - Questioner uses **`trainer.n_gpus_per_node=4`** → batch must be divisible by **4**.
-  - Solver uses **`trainer.n_gpus_per_node=8`** → batch must be divisible by **8**.
-  - Using **8** satisfies both. A value like **2** fails with: `AssertionError: only support equal chunk. Got size of DataProto 2 and chunk 4.`
-
-Modal CLI parameters on [`modal_run.py`](../modal_run.py) (`smoke_*`) are forwarded as **`SMOKE_*`** environment variables for `smoke_test.sh`.
-
----
-
-## GPU layout on the 8-GPU worker
-
-- **GPUs 0–3:** Questioner GRPO (and later solver training uses all 8 per config).
-- **GPUs 4–7:** Four **vLLM** processes (ports **5000–5003**) for the **caller_penalty** reward during questioner training only; stopped before solver phase.
-
----
-
-## Running (always detach for long jobs)
+**Always use `--detach`** for long GPU jobs so losing the local terminal or network does not kill the remote job.
 
 ```bash
+cd /path/to/R-Zero
 modal run --detach modal_run.py
 ```
 
-Or with overrides:
+**With CLI overrides** (Hydra-style args on the Modal entrypoint):
 
 ```bash
 modal run --detach modal_run.py \
   --base-model Qwen/Qwen3-4B-Base \
   --abbr qwen3-4b-smoke \
   --smoke-max-train-samples 8 \
+  --smoke-max-val-samples 8 \
+  --smoke-rollout-batch-size 8 \
+  --smoke-val-batch-size 8 \
+  --smoke-global-batch-size 8 \
   --smoke-questioner-max-steps 2 \
-  --smoke-solver-max-steps 4
+  --smoke-solver-max-steps 4 \
+  --smoke-questions-per-gpu 8
 ```
 
-Wrapper:
+**Thin wrapper:**
 
 ```bash
 bash scripts/modal_run_smoke_detach.sh
 ```
 
-**Why `--detach`:** Without it, the app is **ephemeral**; losing the local CLI (terminal close, VPN drop) can **stop** the remote job. Detached apps keep running; follow with the **Modal dashboard** or `modal app logs <app-id>`.
+After `modal run` prints **“View run at”**, open that **Modal dashboard** URL for live logs. Local streaming may continue until the function exits; with **`--detach`**, stopping the local process should **not** stop the remote function.
 
-**Resume:** Modal does not “resume” a **stopped** app ID. Training **checkpoint resume** would require passing **`load_checkpoint_path`** (or equivalent) into `verl` — not implemented in the smoke script today.
+**Logs from CLI** (app name from `.env` `APP_NAME`, default `r-zero-main`):
+
+```bash
+modal app list
+modal app logs r-zero-main
+```
+
+---
+
+## End-to-end workflow (what runs inside the container)
+
+`modal_run.py` sets `HF_HOME` / `HUGGINGFACE_HUB_CACHE` under **`/storage/hf_cache`**, ensures dirs (`evaluation`, `models`, `generated_question`, `temp_results`), then runs:
+
+```bash
+bash scripts/smoke_test.sh <base_model> <abbr>
+```
+
+### STEP 1 / 2 — Questioner v1
+
+1. **`RUN_ID`** exported; four **vLLM** reward servers start on **GPUs 4–7** ([`vllm_service_init/start.sh`](../vllm_service_init/start.sh)), ports **5000–5003**.
+2. Smoke **polls `http://127.0.0.1:<port>/health`** until all are up (reward code must use **127.0.0.1**, not `0.0.0.0`, for reliable `requests`).
+3. **GRPO training** on **GPUs 0–3** (`trainer.n_gpus_per_node=4`), reward [`caller_penalty.py`](../examples/reward_function/caller_penalty.py), `trainer.max_steps=SMOKE_QUESTIONER_MAX_STEPS` (default **2**), checkpoints under  
+   `/storage/models/<abbr>_questioner_v1/`.
+4. **`model_merger.py`** merges FSDP shards at  
+   `.../global_step_<Q_MERGE>/actor`  
+   with **`Q_MERGE = Q_STEPS - 1`** (default **1** → **`global_step_1`**).
+5. vLLM reward processes are **killed** before the solver phase.
+
+**Valid questioner path for later steps:**
+
+`/storage/models/<abbr>_questioner_v1/global_step_<Q_MERGE>/actor/huggingface`
+
+### STEP 2 / 2 — Solver v1
+
+Requires **`HUGGINGFACENAME`** set (fail-fast if missing).
+
+| Substep | What happens |
+|--------|----------------|
+| **2a** | [`question_generate/question_generate.bash`](../question_generate/question_generate.bash): **8** workers on GPUs **0–7** load the **merged questioner** in vLLM and write  
+`/storage/generated_question/<solver_save>_<0..7>.json`  
+(**`SMOKE_QUESTIONS_PER_GPU`** questions per file; default **8** → **64** total generations). **All workers must exit 0** before 2b. |
+| **2b** | [`question_evaluate/evaluate.sh`](../question_evaluate/evaluate.sh): **8** workers read those JSONs, run majority-vote scoring with the **base model**, write  
+`*_<i>_results.json`. |
+| **2c** | [`question_evaluate/upload.py`](../question_evaluate/upload.py): merge results, filter scores (smoke uses **0.0–1.0**), push to **`{HUGGINGFACENAME}/{solver_save}`** with config name = experiment. **`--train_rows $N_TRAIN`** uploads **exactly `N_TRAIN`** rows (default **8**) so Hub train size matches rollout / `max_train_samples`. |
+| **2d** | **Solver GRPO** on **8** GPUs; `data.train_files=${HUGGINGFACENAME}/${solver_save}@train`. |
+| **2e** | Merge solver checkpoint at `global_step_<S_MERGE>`, **`S_MERGE = S_STEPS - 1`**. |
+
+### STEP 3 — Optional GSM8K sanity check
+
+[`evaluation/generate.py`](../evaluation/generate.py) on **GPU 0**; failures are **non-fatal** (`|| echo WARN`).
+
+### After success
+
+`modal_run.py` calls **`volume.commit()`** so new data is persisted on the **Modal volume**.
+
+---
+
+## Smoke scale defaults (aligned on 8)
+
+| Variable | Default | Role |
+|----------|---------|------|
+| `SMOKE_MAX_TRAIN_SAMPLES` / `SMOKE_MAX_VAL_SAMPLES` | **8** | Caps for questioner (math12k) and solver val; matches batch multiples. |
+| `SMOKE_ROLLOUT_BATCH_SIZE` / `SMOKE_VAL_BATCH_SIZE` / `SMOKE_GLOBAL_BATCH_SIZE` | **8** | Must be divisible by **4** (questioner) and **8** (solver) for even `DataProto` chunking. |
+| `SMOKE_QUESTIONER_MAX_STEPS` | **2** | Questioner PPO steps; merge at **`global_step_(steps-1)`**. |
+| `SMOKE_SOLVER_MAX_STEPS` | **4** | Solver PPO steps. |
+| `SMOKE_QUESTIONS_PER_GPU` | **8** | **8×8 = 64** generated questions so evaluation/filtering usually still yields **≥ 8** rows before `--train_rows` truncation. |
+
+Modal forwards these as **`SMOKE_*`** env vars from [`modal_run.py`](../modal_run.py) defaults.
 
 ---
 
@@ -106,51 +130,111 @@ bash scripts/modal_run_smoke_detach.sh
 
 | Location | Contents |
 |----------|----------|
-| **Modal volume** (`/storage`) | Checkpoints under `models/`, `generated_question/`, `temp_results/`, `evaluation/`, **`hf_cache/`** (HF model hub cache) |
-| **Hugging Face Hub** | Filtered solver dataset from **`question_evaluate/upload.py`** (repo name derived from experiment); base model IDs still pulled from Hub into the volume cache |
+| **Modal volume** (`/storage`) | `models/` (checkpoints), `generated_question/`, `temp_results/`, `evaluation/`, **`hf_cache/`** (HF model cache) |
+| **Hugging Face Hub** | Solver **train** dataset pushed by `upload.py` (private repo under **`HUGGINGFACENAME`**); solver training reads **`{HUGGINGFACENAME}/<solver_save>@train`**. |
 
 ---
 
 ## WandB and logging
 
-- Smoke sets **`WANDB_MODE=disabled`** by default in `smoke_test.sh` to avoid extra network and logging noise.
-- Trainer uses **`trainer.logger='[console]'`** in smoke for the same reason. You can re-enable WandB by changing env/config if needed.
+- **`WANDB_MODE=disabled`** in `smoke_test.sh` by default (fewer network/DNS issues on Modal).
+- Smoke **`trainer.logger='[console]'`** for questioner and solver.
 
 ---
 
-## Fixes and gotchas encountered
+## Repository files (Modal / smoke–specific)
 
-1. **Modal API:** Use **`image.add_local_dir`** + **`FilePatternMatcher`**, not deprecated `Mount.from_local_dir` / `mounts=`.
-2. **`tokens.json` in container:** Only read on **local** import; container relies on **secret env vars**.
-3. **Reward HTTP:** Use **`http://127.0.0.1:<port>`** instead of **`0.0.0.0`** for `requests` (resolution / proxy issues).
-4. **`/health`:** Added on Flask vLLM wrapper; smoke polls it instead of misusing `/hello`.
-5. **`caller_penalty.py`:** `extract_boxed_content` returns a **string** — do not index like a list.
-6. **`verl/utils/dataset.py`:** Guard **`self.format_prompt`** before substring checks.
-7. **`fsdp_workers.py`:** **`flash_attention_2`** only if `flash_attn` imports; else **`sdpa`**.
-8. **Dependencies:** `stopit`, `codetiming`, **`wheel`** before building flash-attn in the image.
-9. **Detached + streaming:** Local `modal run` may still stream until the function finishes; closing the terminal is safe **only with `--detach`**.
-
----
-
-## Security note
-
-Do **not** commit **`.env`**, **`tokens.json`**, or real API keys. This doc intentionally avoids pasting secrets. Rotate any key that was ever committed or shared in chat.
+| Piece | Role |
+|--------|------|
+| [`modal_run.py`](../modal_run.py) | App, image, volume, `run_smoke_test`, env (`VLLM_DISABLE_COMPILE_CACHE`, `NO_PROXY`, **`TORCHINDUCTOR_MAX_AUTOTUNE=0`**, etc.) |
+| [`scripts/smoke_test.sh`](../scripts/smoke_test.sh) | Full orchestration; eager vLLM + no actor `torch.compile` for smoke; clears **`/tmp/torchinductor_*`** |
+| [`scripts/modal_run_smoke_detach.sh`](../scripts/modal_run_smoke_detach.sh) | `modal run --detach modal_run.py` |
+| [`question_generate/question_generate.py`](../question_generate/question_generate.py) | Prepends **repo root** to `sys.path` before `import evaluation` |
+| [`question_generate/question_generate.bash`](../question_generate/question_generate.bash) | `set -euo pipefail`; **wait each PID** so 2a failure stops before 2b |
+| [`question_evaluate/evaluate.sh`](../question_evaluate/evaluate.sh) | Quoted args; **wait all 8** jobs; propagate non-zero exit |
+| [`question_evaluate/upload.py`](../question_evaluate/upload.py) | **`--train_rows`**, smoke score band **0–1**, empty-filter checks |
+| [`verl/trainer/data_loader.py`](../verl/trainer/data_loader.py) | **`drop_last`** only if `len(train) > rollout_batch_size` (avoids **0** train batches on tiny HF splits) |
+| [`evaluation/generate.py`](../evaluation/generate.py) | Repo root on `sys.path`; **`STORAGE_PATH`** required |
 
 ---
 
-## Quick reference commands
+## Findings and fixes (debugging history)
+
+### 1. Empty solver train split / `SchemaInferenceError` (0 examples)
+
+**Cause:** Full pipeline uses score band **0.3–0.8** in `upload.py`. Smoke majority-vote scores are often **0** or **1**, so **no rows** passed the filter → empty Hub dataset → `load_dataset` failed.
+
+**Fix:** Smoke **2c** uses **`--min_score 0.0 --max_score 1.0`**. **`--train_rows "$N_TRAIN"`** uploads **exactly 8** rows when enough candidates exist.
+
+### 2. Train dataloader `assert len(train_dataloader) >= 1`
+
+**Cause:** **`drop_last=True`** with **5** train rows and **`rollout_batch_size=8`** → **0** batches.
+
+**Fix:** [`data_loader.py`](../verl/trainer/data_loader.py): **`drop_last`** only when **`len(train_dataset) > rollout_batch_size`**.
+
+### 3. Missing `generated_question/*.json` and “Input file not found” in evaluate
+
+**Cause A:** **`ModuleNotFoundError: evaluation`** — running `python question_generate/question_generate.py` only adds **`question_generate/`** to `sys.path`, not the repo root.
+
+**Fix:** Insert **repo root** on `sys.path` before importing `evaluation`.
+
+**Cause B:** **`question_generate.bash`** used bare **`wait`**, which does **not** fail the script when background jobs crash → **2b ran with no files**.
+
+**Fix:** Wait **each PID** and **`exit 1`** if any worker fails.
+
+### 4. Count mismatch (e.g. 5 rows vs expected 8)
+
+**Cause:** Evaluation drops many items (parse / grader / filters). **24** raw questions could shrink to **5**.
+
+**Fix:** Default **`SMOKE_QUESTIONS_PER_GPU=8`** (64 total); **`--train_rows`** enforces **exact Hub train size = `N_TRAIN`**.
+
+### 5. `BackendCompilerFailed` / `JSONDecodeError` (TorchInductor autotune cache)
+
+**Cause:** vLLM compilation path hit **corrupt or bad TorchInductor autotune JSON** under **`/tmp/torchinductor_*`**.
+
+**Fix (smoke):** **`worker.rollout.enforce_eager=true`**, **`worker.actor.use_torch_compile=false`** in `smoke_test.sh`; **`rm -rf /tmp/torchinductor_root`** at smoke start; **`TORCHINDUCTOR_MAX_AUTOTUNE=0`** in `modal_run.py` env.
+
+### 6. STEP 3 GSM8K `import evaluation` failure
+
+**Cause:** Same **`sys.path`** issue as question generation when running `python evaluation/generate.py`.
+
+**Fix:** Repo root on `sys.path` at top of [`evaluation/generate.py`](../evaluation/generate.py).
+
+### 7. Operational gotchas (retained from earlier work)
+
+- **FSDP / attention:** [`verl/workers/fsdp_workers.py`](../verl/workers/fsdp_workers.py) falls back to **SDPA** if `flash_attn` is not installed.
+- **Modal mounts:** `image.add_local_dir` + `FilePatternMatcher` (not deprecated `Mount.from_local_dir`).
+- **Reward HTTP:** **`127.0.0.1`**, not **`0.0.0.0`**.
+- **vLLM readiness:** **`GET /health`** on Flask wrapper ([`start_vllm_server.py`](../vllm_service_init/start_vllm_server.py)).
+- **`caller_penalty.py`:** `extract_boxed_content` returns a **string** — do not index like a list.
+- **DNS / long streams:** prior failures with **`nodename nor servname`** or flaky streams; **`WANDB_MODE=disabled`** in smoke reduces Hub-adjacent noise.
+- **`HUGGINGFACENAME`:** must be set before solver phase (upload + `train_files`).
+
+---
+
+## GPU layout (8-GPU Modal worker)
+
+- **GPUs 0–3:** Questioner GRPO.
+- **GPUs 4–7:** Four vLLM instances (**5000–5003**) for **caller_penalty** during questioner training only; stopped before solver.
+- **Solver:** training uses **all 8** GPUs per `trainer.n_gpus_per_node=8`.
+
+---
+
+## Security
+
+Do **not** commit **`.env`**, **`tokens.json`**, or API keys. Rotate any key that was exposed.
+
+---
+
+## Quick reference
 
 ```bash
-# List apps
+modal run --detach modal_run.py
 modal app list
-
-# Logs for a detached run
-modal app logs <APP_ID>
-
-# Stop a detached app
-modal app stop <APP_ID>
+modal app logs r-zero-main
+modal app stop <app_id>
 ```
 
 ---
 
-*Last updated to match the smoke/Modal setup in this repo (Modal detached runs, 8-sample cap, batch size 8, single iteration).*
+*Last updated: Modal smoke workflow, start commands, storage, and consolidated debugging notes (train rows, imports, bash wait, Inductor/vLLM compile, dataloader `drop_last`).*

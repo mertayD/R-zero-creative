@@ -1,13 +1,23 @@
-import vllm
 import argparse
-import  evaluation.datasets_loader as datasets_loader
-from transformers import AutoTokenizer
 import json
 import os
+import sys
+
+# `python evaluation/generate.py` only puts this directory on sys.path; package
+# `evaluation` resolves from repo root.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+import vllm
+import evaluation.datasets_loader as datasets_loader
+from transformers import AutoTokenizer
 
 STORAGE_PATH = os.getenv("STORAGE_PATH")
 
 def main(args):
+    if not STORAGE_PATH:
+        raise RuntimeError("STORAGE_PATH is not set")
     print("STORAGE_PATH")
     print(STORAGE_PATH)
     with open('tokens.json','r') as f: 

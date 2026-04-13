@@ -1,13 +1,23 @@
-import vllm
-import torch
-from transformers import AutoTokenizer
 import argparse
-from typing import List
-from vllm.outputs import RequestOutput
-from evaluation.datasets_loader import get_dataset_handler
 import json
-import regex as re
 import os
+import sys
+from typing import List
+
+# Running as `python question_generate/question_generate.py` puts only
+# `question_generate/` on sys.path; top-level `evaluation/` lives at repo root.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+import regex as re
+import torch
+import vllm
+from transformers import AutoTokenizer
+from vllm.outputs import RequestOutput
+
+from evaluation.datasets_loader import get_dataset_handler
+
 STORAGE_PATH = os.getenv("STORAGE_PATH")
 
 def extract_boxed(text):
@@ -120,8 +130,15 @@ def main(args):
                 results.append({"question": response, "answer": "", "score": -1})
         except:
             results.append({"question": response, "answer": "", "score": -1})
-    with open(f"{STORAGE_PATH}/generated_question/{args.save_name}_{args.suffix}.json", "w") as f:
+    if not STORAGE_PATH:
+        print("ERROR: STORAGE_PATH is not set; cannot write generated questions.", file=sys.stderr)
+        sys.exit(1)
+    out_dir = os.path.join(STORAGE_PATH, "generated_question")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{args.save_name}_{args.suffix}.json")
+    with open(out_path, "w") as f:
         json.dump(results, f, indent=4)
+    print(f"[{args.suffix}] Wrote {out_path} ({len(results)} items).")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -131,4 +148,8 @@ if __name__ == "__main__":
     parser.add_argument("--save_name", type=str, default="", help="")
     args = parser.parse_args()
 
-    main(args) 
+    try:
+        main(args)
+    except Exception as e:
+        print(f"[{args.suffix}] question_generate failed: {e}", file=sys.stderr)
+        raise 

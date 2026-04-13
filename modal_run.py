@@ -159,6 +159,8 @@ app = modal.App(APP_NAME)
     # Forward environment variables used by sub-scripts
     env={
         "VLLM_DISABLE_COMPILE_CACHE":      "1",
+        # vLLM+Inductor autotune cache under /tmp can JSONDecodeError across runs; smoke uses eager anyway.
+        "TORCHINDUCTOR_MAX_AUTOTUNE":       "0",
         "TOKENIZERS_PARALLELISM":           "true",
         "NCCL_DEBUG":                       "WARN",
         "VLLM_LOGGING_LEVEL":               "WARN",
@@ -181,7 +183,7 @@ def run_smoke_test(
     smoke_global_batch_size: int = 8,
     smoke_questioner_max_steps: int = 2,
     smoke_solver_max_steps: int = 4,
-    smoke_questions_per_gpu: int = 3,
+    smoke_questions_per_gpu: int = 8,
 ):
     """
     Run one full R-Zero iteration (questioner + solver) on a small data budget
@@ -268,7 +270,7 @@ def main(
     smoke_global_batch_size: int = 8,
     smoke_questioner_max_steps: int = 2,
     smoke_solver_max_steps: int = 4,
-    smoke_questions_per_gpu: int = 3,
+    smoke_questions_per_gpu: int = 8,
 ):
     run_smoke_test.remote(
         base_model=base_model,

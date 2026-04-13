@@ -118,8 +118,6 @@ def accuracy_reward(predict: str, ground_truth: str) -> float:
 
 def compute_score(predicts: List[str], ground_truths: List[str], format_weight: float = 0.1, file_path: str = "") -> List[Dict[str, float]]:
     results = []
-    with open('test.json','w') as f:
-        json.dump(predicts,f,indent=4)
     for i in range(len(predicts)):
         questions = re.findall(r"<question>(.*?)</question>", predicts[i], re.DOTALL)
         # extract_boxed_content returns a single string (or None), not a list

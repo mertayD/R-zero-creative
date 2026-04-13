@@ -16,6 +16,13 @@ parser.add_argument("--repo_name", type=str, default="")
 parser.add_argument("--max_score", type=float, default=0.7)
 parser.add_argument("--min_score", type=float, default=0.3)
 parser.add_argument("--experiment_name", type=str, default="Qwen_Qwen3-4B-Base_all")
+parser.add_argument(
+    "--train_rows",
+    type=int,
+    default=None,
+    help="If set, require at least this many rows after filtering and upload exactly this many "
+    "(first N). Use with smoke so Hub train size matches data.max_train_samples / rollout_batch_size.",
+)
 args = parser.parse_args()
 
 datas= []
@@ -38,6 +45,8 @@ for i in range(8):
 
 scores = [data['score'] for data in datas]
 #  print the distribution of scores
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 plt.hist(scores, bins=11)
 plt.savefig('scores_distribution.png')
@@ -59,6 +68,17 @@ if not args.repo_name == "":
             f"[{args.min_score}, {args.max_score}] and non-empty answers, 0 rows remain "
             f"(had {n} evaluated rows). Widen --min_score/--max_score or fix evaluation."
         )
+    if args.train_rows is not None:
+        need = args.train_rows
+        have = len(filtered_datas)
+        if have < need:
+            raise SystemExit(
+                "upload.py: need at least --train_rows "
+                f"{need} after filter, got {have}. Increase generation "
+                "(e.g. SMOKE_QUESTIONS_PER_GPU) or relax filters."
+            )
+        filtered_datas = filtered_datas[:need]
+        print(f"upload.py: uploading exactly {need} train rows (had {have} after filter).")
     train_dataset = Dataset.from_list(filtered_datas)
     dataset_dict = {"train": train_dataset}
     config_name = f"{args.experiment_name}"
