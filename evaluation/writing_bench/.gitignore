@@ -1,0 +1,10 @@
+# WritingBench data files are fetched on demand by fetch_data.sh, not vendored.
+benchmark_query/
+
+# Eval artifacts go to <storage_path>/writing_bench by convention (recommended
+# OUTSIDE this repo). These patterns are a safety net in case anyone runs with
+# storage_path pointing inside this directory.
+eval_samples/
+responses/
+scores/
+*.xlsx

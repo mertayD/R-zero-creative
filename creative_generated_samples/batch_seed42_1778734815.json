@@ -1,0 +1,247 @@
+{
+  "batch_id": "batch_seed42_1778734815",
+  "num_prompts": 5,
+  "domains_sampled": [
+    "D6",
+    "D2",
+    "D1"
+  ],
+  "subdomains_sampled": [
+    "Product Description",
+    "Human Resource Management",
+    "Email Marketing",
+    "Experiments"
+  ],
+  "generation_log": {
+    "total_attempted": 5,
+    "total_generated": 4,
+    "json_parse_failures": 0,
+    "network_failures": 0,
+    "skipped": 1,
+    "error_details": [
+      {
+        "prompt_id": "prompt_0001",
+        "stage": "criteria_generation",
+        "type": "non_fatal",
+        "error": "Failed to parse criteria (continuing without criteria)",
+        "action": "continue"
+      },
+      {
+        "prompt_id": "prompt_0004",
+        "stage": "refinement",
+        "type": "unknown",
+        "error": "Empty response from model",
+        "action": "skip"
+      },
+      {
+        "prompt_id": "prompt_0005",
+        "stage": "criteria_generation",
+        "type": "non_fatal",
+        "error": "Failed to parse criteria (continuing without criteria)",
+        "action": "continue"
+      }
+    ]
+  },
+  "prompts": [
+    {
+      "prompt_id": "prompt_0001",
+      "domain": "D6",
+      "domain_name": "Advertising & Marketing",
+      "subdomain": "Product Description",
+      "initial_query_template": "Generate 1 different writing requests under Product Description within the context of Advertising & Marketing in English. Ensure the requests are as detailed and specific as possible, and reflect realistic user tone and needs.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  \"Writing request 1\",\n  \"Writing request 2\",\n  ...\n]\n</output>",
+      "refinement_template": "Please refine and enhance the original writing requirements in the context of generating content in Advertising & Marketing from Advertising & Marketing based on the provided guidance. Include as many details as possible and indicate whether additional writing materials are needed.\n\n**Original Writing Requirements**\n ```\n[\n  \"Write a product description for a new line of organic skincare products targeting eco-conscious consumers, highlighting the natural ingredients, sustainability practices, and benefits for skin health.\",\n  \"Craft a compelling product description for a luxury smartwatch, emphasizing its sleek design, advanced features, and how it enhances productivity and lifestyle tracking for modern professionals.\",\n  \"Create an engaging product description for a new range of high-performance running shoes, focusing on their durability, comfort, and performance-enhancing features for athletes and fitness enthusiasts.\",\n  \"Develop a detailed product description for a cutting-edge home security system, highlighting its advanced technology, ease of use, and comprehensive protection features for families and businesses.\",\n  \"Write a persuasive product description for a premium line of gourmet coffee beans, emphasizing their unique flavor profiles, sourcing practices, and how they elevate any coffee brewing experience.\"\n]\n```\n\n**Guidance for Modification**\nAdd a requirement for generating specific lengths. Add style requirements, like drafting a speech suitable for a particular occasion or adopting the style suitable for a specific audience or mimicking a particular tone.\n\n**Output Requirements**\nReturn ONLY the following format - nothing else:\n<output>\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"Whether additional reference materials are needed to supplement the writing requirements. If needed, provide suggestions for the materials; if not needed, return empty string\"\n}\n</output>",
+      "criteria_template": "Please generate five strict evaluation criteria for assessing the response given the following query. Each criterion should include the following fields: name, criteria_description, 1-2, 3-4, 5-6, 7-8, 9-10.\n\nThe criteria should be designed to emphasize detailed assessment and distinguish subtle differences in quality. Ensure that the criteria can discern issues such as relevance, coherence, depth, specificity, and adherence to the query context.\n\n**Query**\nGenerate a product description for a new line of organic skincare products targeting eco-conscious consumers, focusing on the natural ingredients, sustainability practices, and benefits for skin health. Ensure the description is concise, engaging, and suitable for a professional audience in the context of Advertising & Marketing, while maintaining a professional and informative tone.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  {\n    \"name\": \"first_criteria_name\",\n    \"criteria_description\": \"Description for the first criteria, emphasizing detailed and critical assessment.\",\n    \"1-2\": \"Low score description: Critical deficiencies and major issues that prevent adequate functionality.\",\n    \"3-4\": \"Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.\",\n    \"5-6\": \"Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements. Most models may achieve this score.\",\n    \"7-8\": \"Above average score description: Strong performance characterized by competent execution, though minor refinements are needed to achieve excellence.\",\n    \"9-10\": \"High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness and quality without any flaws.\"\n  },\n  ...\n]\n</output>",
+      "initial_query": " ```\n[\n  \"Write a product description for a new line of organic skincare products targeting eco-conscious consumers, highlighting the natural ingredients, sustainability practices, and benefits for skin health.\",\n  \"Craft a compelling product description for a luxury smartwatch, emphasizing its sleek design, advanced features, and how it enhances productivity and lifestyle tracking for modern professionals.\",\n  \"Create an engaging product description for a new range of high-performance running shoes, focusing on their durability, comfort, and performance-enhancing features for athletes and fitness enthusiasts.\",\n  \"Develop a detailed product description for a cutting-edge home security system, highlighting its advanced technology, ease of use, and comprehensive protection features for families and businesses.\",\n  \"Write a persuasive product description for a premium line of gourmet coffee beans, emphasizing their unique flavor profiles, sourcing practices, and how they elevate any coffee brewing experience.\"\n]\n```",
+      "refined_query": "Generate a product description for a new line of organic skincare products targeting eco-conscious consumers, focusing on the natural ingredients, sustainability practices, and benefits for skin health. Ensure the description is concise, engaging, and suitable for a professional audience in the context of Advertising & Marketing, while maintaining a professional and informative tone.",
+      "initial_query_format_score": -1,
+      "refined_query_format_score": 1,
+      "criteria_format_score": -1,
+      "requirements": {
+        "style": "Inferred from query",
+        "format": "Inferred from query",
+        "length": null
+      },
+      "evaluation_criteria": null,
+      "num_criteria": 5,
+      "language": "English",
+      "guidance_applied": [
+        "Add a requirement for generating specific lengths.",
+        "Add style requirements, like drafting a speech suitable for a particular occasion or adopting the style suitable for a specific audience or mimicking a particular tone."
+      ],
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0002",
+      "domain": "D2",
+      "domain_name": "Finance & Business",
+      "subdomain": "Human Resource Management",
+      "initial_query_template": "Generate 1 different writing requests under Human Resource Management within the context of Finance & Business in English. Ensure the requests are as detailed and specific as possible, and reflect realistic user tone and needs.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  \"Writing request 1\",\n  \"Writing request 2\",\n  ...\n]\n</output>",
+      "refinement_template": "Please refine and enhance the original writing requirements in the context of generating content in Finance & Business from Finance & Business based on the provided guidance. Include as many details as possible and indicate whether additional writing materials are needed.\n\n**Original Writing Requirements**\n1. Develop a comprehensive performance management plan for the finance department, outlining key performance indicators (KPIs), evaluation criteria, and feedback mechanisms.\n\n**Guidance for Modification**\nInclude format adherence requirements, such as writing according to a prescribed outline or outputting in a specific format. Add a requirement for generating specific lengths.\n\n**Output Requirements**\nReturn ONLY the following format - nothing else:\n<output>\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"Whether additional reference materials are needed to supplement the writing requirements. If needed, provide suggestions for the materials; if not needed, return empty string\"\n}\n</output>",
+      "criteria_template": "Please generate five strict evaluation criteria for assessing the response given the following query. Each criterion should include the following fields: name, criteria_description, 1-2, 3-4, 5-6, 7-8, 9-10.\n\nThe criteria should be designed to emphasize detailed assessment and distinguish subtle differences in quality. Ensure that the criteria can discern issues such as relevance, coherence, depth, specificity, and adherence to the query context.\n\n**Query**\n ```json\n{\n  \"query\": \"Develop a comprehensive performance management plan for the finance department, outlining key performance indicators (KPIs), evaluation criteria, and feedback mechanisms. The plan should adhere to a structured format consisting of the following sections:\\n\\n1. Executive Summary\\n2. Background and Objectives\\n3. KPIs\\n4. Evaluation Criteria\\n5. Feedback Mechanisms\\n6. Implementation Plan\\n7. Monitoring and Review Process\\n\\nEnsure the KPIs are SMART (Specific, Measurable, Achievable, Relevant, Time-bound) and aligned with departmental and organizational goals. The evaluation criteria should include both quantitative and qualitative metrics, with a focus on financial performance, cost control, and process efficiency. Feedback mechanisms should facilitate timely and constructive communication between managers and team members. The plan should be concise, approximately 1,500 words in length, and include executive summaries for each section. Provide recommendations for implementing the plan and adjusting it based on performance review outcomes.\\n\\nMaterial: Ensure the KPIs and evaluation criteria are supported by relevant financial data and benchmarks. Suggest the use of financial reporting tools or software to track KPIs.\",\n  \"material\": \"Financial reporting tools or software, benchmarking data\"\n}\n```\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  {\n    \"name\": \"first_criteria_name\",\n    \"criteria_description\": \"Description for the first criteria, emphasizing detailed and critical assessment.\",\n    \"1-2\": \"Low score description: Critical deficiencies and major issues that prevent adequate functionality.\",\n    \"3-4\": \"Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.\",\n    \"5-6\": \"Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements. Most models may achieve this score.\",\n    \"7-8\": \"Above average score description: Strong performance characterized by competent execution, though minor refinements are needed to achieve excellence.\",\n    \"9-10\": \"High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness and quality without any flaws.\"\n  },\n  ...\n]\n</output>",
+      "initial_query": "1. Develop a comprehensive performance management plan for the finance department, outlining key performance indicators (KPIs), evaluation criteria, and feedback mechanisms.",
+      "refined_query": " ```json\n{\n  \"query\": \"Develop a comprehensive performance management plan for the finance department, outlining key performance indicators (KPIs), evaluation criteria, and feedback mechanisms. The plan should adhere to a structured format consisting of the following sections:\\n\\n1. Executive Summary\\n2. Background and Objectives\\n3. KPIs\\n4. Evaluation Criteria\\n5. Feedback Mechanisms\\n6. Implementation Plan\\n7. Monitoring and Review Process\\n\\nEnsure the KPIs are SMART (Specific, Measurable, Achievable, Relevant, Time-bound) and aligned with departmental and organizational goals. The evaluation criteria should include both quantitative and qualitative metrics, with a focus on financial performance, cost control, and process efficiency. Feedback mechanisms should facilitate timely and constructive communication between managers and team members. The plan should be concise, approximately 1,500 words in length, and include executive summaries for each section. Provide recommendations for implementing the plan and adjusting it based on performance review outcomes.\\n\\nMaterial: Ensure the KPIs and evaluation criteria are supported by relevant financial data and benchmarks. Suggest the use of financial reporting tools or software to track KPIs.\",\n  \"material\": \"Financial reporting tools or software, benchmarking data\"\n}\n```",
+      "initial_query_format_score": 1,
+      "refined_query_format_score": -1,
+      "criteria_format_score": 1,
+      "requirements": {
+        "style": null,
+        "format": "Inferred from query",
+        "length": "Inferred from query"
+      },
+      "evaluation_criteria": [
+        {
+          "name": "Relevance",
+          "criteria_description": "The response must directly address the query with clear and concise answers to all required components of the performance management plan for the finance department.",
+          "1-2": "The response fails to address the query entirely or includes irrelevant information.",
+          "3-4": "The response partially addresses the query but lacks clarity and completeness in essential sections.",
+          "5-6": "The response addresses most of the query requirements but contains minor omissions or inaccuracies.",
+          "7-8": "The response is mostly relevant to the query but could include some additional detail or refinement.",
+          "9-10": "The response fully and accurately addresses all aspects of the query with clear and well-structured answers."
+        },
+        {
+          "name": "Coherence",
+          "criteria_description": "The response should be logically organized, with a clear flow from one section to the next, and each section should be appropriately detailed and relevant to the query.",
+          "1-2": "The response is disjointed, with no clear connection between sections or coherent reasoning.",
+          "3-4": "The response is somewhat coherent but lacks logical transitions and clear progression between sections.",
+          "5-6": "The response is generally coherent but may have occasional sections that feel out of place or unnecessary.",
+          "7-8": "The response is well-organized with logical progression but could benefit from a stronger connection between sections.",
+          "9-10": "The response is logically and coherently structured, with smooth transitions between sections and a clear progression that enhances understanding."
+        },
+        {
+          "name": "Depth",
+          "criteria_description": "The response should provide a detailed and in-depth analysis of each section, including clear definitions of KPIs, evaluation criteria, and feedback mechanisms, supported by relevant data and benchmarks.",
+          "1-2": "The response provides only a superficial overview without any detailed analysis or explanation.",
+          "3-4": "The response offers some detail but lacks in-depth analysis and fails to provide comprehensive explanations.",
+          "5-6": "The response includes a reasonable level of detail but does not thoroughly explore or analyze the requested components.",
+          "7-8": "The response is detailed but may lack some depth or specific examples to fully support the analysis.",
+          "9-10": "The response is exceptionally detailed, providing thorough analysis, clear definitions, and robust support through relevant data and benchmarks."
+        },
+        {
+          "name": "Specificity",
+          "criteria_description": "The response should provide specific and actionable details for each component of the performance management plan, including clear examples and practical recommendations for implementation.",
+          "1-2": "The response is vague and lacks specific details or actionable information.",
+          "3-4": "The response provides some specific details but lacks clarity and practicality in implementation.",
+          "5-6": "The response is somewhat specific but could provide more detailed examples or actionable steps.",
+          "7-8": "The response is generally specific but could include more detailed examples or refine recommendations for implementation.",
+          "9-10": "The response is highly specific and includes detailed, actionable information with clear examples and practical recommendations."
+        },
+        {
+          "name": "Adherence to Context",
+          "criteria_description": "The response should closely adhere to the query's context and requirements, ensuring that the performance management plan is tailored to the finance department and aligns with the query's detailed specifications.",
+          "1-2": "The response significantly deviates from the query's context and requirements, failing to align with the specified format and content.",
+          "3-4": "The response partially adheres to the query's context but contains notable deviations or omissions.",
+          "5-6": "The response generally adheres to the query's context but could improve alignment with the specified format and content.",
+          "7-8": "The response is mostly aligned with the query's context but could benefit from better integration of the specified format and content.",
+          "9-10": "The response fully and perfectly adheres to the query's context, meeting all specified format and content requirements."
+        }
+      ],
+      "num_criteria": 5,
+      "language": "English",
+      "guidance_applied": [
+        "Include format adherence requirements, such as writing according to a prescribed outline or outputting in a specific format.",
+        "Add a requirement for generating specific lengths."
+      ],
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0003",
+      "domain": "D6",
+      "domain_name": "Advertising & Marketing",
+      "subdomain": "Email Marketing",
+      "initial_query_template": "Generate 1 different writing requests under Email Marketing within the context of Advertising & Marketing in English. Ensure the requests are as detailed and specific as possible, and reflect realistic user tone and needs.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  \"Writing request 1\",\n  \"Writing request 2\",\n  ...\n]\n</output>",
+      "refinement_template": "Please refine and enhance the original writing requirements in the context of generating content in Advertising & Marketing from Advertising & Marketing based on the provided guidance. Include as many details as possible and indicate whether additional writing materials are needed.\n\n**Original Writing Requirements**\nGenerate an email subject line for a series of monthly newsletters that we're sending out to our customers. The aim is to increase open rates and keep our subscribers engaged with our brand. We want to create a catchy and intriguing subject line that highlights the value of our content to our customers. Include keywords that may help improve our email's visibility on search engines. Can you provide a few creative ideas?\n\n**Guidance for Modification**\nInclude more specific content requirements, like details about a particular event or focusing on specific content. Add a requirement for generating specific lengths.\n\n**Output Requirements**\nReturn ONLY the following format - nothing else:\n<output>\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"Whether additional reference materials are needed to supplement the writing requirements. If needed, provide suggestions for the materials; if not needed, return empty string\"\n}\n</output>",
+      "criteria_template": "Please generate five strict evaluation criteria for assessing the response given the following query. Each criterion should include the following fields: name, criteria_description, 1-2, 3-4, 5-6, 7-8, 9-10.\n\nThe criteria should be designed to emphasize detailed assessment and distinguish subtle differences in quality. Ensure that the criteria can discern issues such as relevance, coherence, depth, specificity, and adherence to the query context.\n\n**Query**\nGenerate an email subject line for a monthly newsletter series aimed at increasing open rates and subscriber engagement. The content focuses on the benefits of our brand and includes keywords for search engine optimization. The email will be approximately 100-150 characters long. Provide multiple creative ideas to choose from.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  {\n    \"name\": \"first_criteria_name\",\n    \"criteria_description\": \"Description for the first criteria, emphasizing detailed and critical assessment.\",\n    \"1-2\": \"Low score description: Critical deficiencies and major issues that prevent adequate functionality.\",\n    \"3-4\": \"Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.\",\n    \"5-6\": \"Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements. Most models may achieve this score.\",\n    \"7-8\": \"Above average score description: Strong performance characterized by competent execution, though minor refinements are needed to achieve excellence.\",\n    \"9-10\": \"High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness and quality without any flaws.\"\n  },\n  ...\n]\n</output>",
+      "initial_query": "Generate an email subject line for a series of monthly newsletters that we're sending out to our customers. The aim is to increase open rates and keep our subscribers engaged with our brand. We want to create a catchy and intriguing subject line that highlights the value of our content to our customers. Include keywords that may help improve our email's visibility on search engines. Can you provide a few creative ideas?",
+      "refined_query": "Generate an email subject line for a monthly newsletter series aimed at increasing open rates and subscriber engagement. The content focuses on the benefits of our brand and includes keywords for search engine optimization. The email will be approximately 100-150 characters long. Provide multiple creative ideas to choose from.",
+      "initial_query_format_score": 1,
+      "refined_query_format_score": 1,
+      "criteria_format_score": 1,
+      "requirements": {
+        "style": null,
+        "format": null,
+        "length": "Inferred from query"
+      },
+      "evaluation_criteria": [
+        {
+          "name": "Relevance",
+          "criteria_description": "Measures how directly and effectively the criteria address the fundamental requirements of the task.",
+          "1-2": "The subject line fails to incorporate key elements such as the keyword for SEO, the frequency (monthly newsletter series), and the target audience (brand benefits).",
+          "3-4": "The subject line attempts to include some key elements but has missing or insufficiently highlighted details about the keyword, frequency, and audience.",
+          "5-6": "The subject line includes a good mix of relevant elements like keywords for SEO, the frequency of the newsletter, and the benefits of the brand, but could be more targeted.",
+          "7-8": "The subject line effectively incorporates all key elements including the keyword for SEO, the frequency (monthly newsletter series), and the benefits of the brand, with some additional strategic touches for engagement.",
+          "9-10": "The subject line flawlessly integrates all key elements\u2014SEO keywords, frequency of the newsletter, and the benefits of the brand\u2014with a clear and compelling tone that significantly boosts potential for high engagement."
+        },
+        {
+          "name": "Coherence",
+          "criteria_description": "Assesses the logical flow and consistency of ideas within the subject line.",
+          "1-2": "The subject line appears disjointed with no clear logical flow between the elements and is inconsistent in terms of how it presents the information.",
+          "3-4": "The subject line has some logical flow and consistency, but certain elements are not clearly connected, leading to confusion.",
+          "5-6": "The subject line maintains a reasonable level of coherence and consistency, with most elements clearly connected, though minor adjustments could improve clarity.",
+          "7-8": "The subject line demonstrates good coherence and consistency, with a logical progression that effectively presents the information and maintains reader interest.",
+          "9-10": "The subject line exhibits exceptional coherence and consistency, presenting a seamless narrative that logically connects all elements for clarity and engagement."
+        },
+        {
+          "name": "Depth",
+          "criteria_description": "Evaluates the thoroughness and level of detail in meeting the criteria.",
+          "1-2": "The subject line lacks depth and detail, failing to provide meaningful insights or additional information that could enhance its impact.",
+          "3-4": "The subject line includes some depth, but lacks sufficient detail in areas such as the keyword integration or specific brand benefits mentioned.",
+          "5-6": "The subject line offers a balanced level of detail, including necessary elements like the keyword, frequency, and some details about brand benefits, but could be more thorough.",
+          "7-8": "The subject line provides a sufficient level of detail, including all required elements and additional strategic information that enhances its effectiveness.",
+          "9-10": "The subject line showcases exceptional depth, offering comprehensive detail across all criteria including keyword integration, frequency, brand benefits, and strategic elements that significantly elevate its potential for engagement."
+        },
+        {
+          "name": "Specificity",
+          "criteria_description": "Assesses the precision and focus on the specific requirements of the task.",
+          "1-2": "The subject line is overly broad and vague, failing to address specific needs such as the exact keyword for SEO, the exact frequency (monthly), and precise brand benefits.",
+          "3-4": "The subject line includes some specific details but is still somewhat broad, missing key specifics related to keyword, frequency, or brand benefits.",
+          "5-6": "The subject line demonstrates a fair level of specificity by including basic details about the keyword, frequency, and some generic brand benefits, but lacks precise engagement strategies.",
+          "7-8": "The subject line is specific and focused, addressing all criteria with clear and concrete details including the keyword, exact frequency, and specific brand benefits.",
+          "9-10": "The subject line is extremely specific and tailored, hitting all criteria with precise details that include the exact keyword, weekly frequency, and detailed brand benefits, along with an impactful engagement strategy."
+        },
+        {
+          "name": "Adherence to Query Context",
+          "criteria_description": "Evaluates how well the subject line adheres to and reflects the context of the query.",
+          "1-2": "The subject line is completely irrelevant to the query and fails to consider any aspects specified in the task description.",
+          "3-4": "The subject line partially adheres to the query, but omits crucial aspects or significantly misrepresents the query\u2019s requirements.",
+          "5-6": "The subject line largely aligns with the query but misses some critical aspects or has slight misalignments that could affect its effectiveness.",
+          "7-8": "The subject line is mostly in line with the query, incorporating most aspects but needing minor refinements to fully meet the task\u2019s expectations.",
+          "9-10": "The subject line perfectly aligns with the query, integrating all specified elements with strategic considerations that exceed the basic expectations and fully addresses the task\u2019s requirements."
+        }
+      ],
+      "num_criteria": 5,
+      "language": "English",
+      "guidance_applied": [
+        "Include more specific content requirements, like details about a particular event or focusing on specific content.",
+        "Add a requirement for generating specific lengths."
+      ],
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0005",
+      "domain": "D1",
+      "domain_name": "Academic & Engineering",
+      "subdomain": "Experiments",
+      "initial_query_template": "Generate 1 different writing requests under Experiments within the context of Academic & Engineering in English. Ensure the requests are as detailed and specific as possible, and reflect realistic user tone and needs.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  \"Writing request 1\",\n  \"Writing request 2\",\n  ...\n]\n</output>",
+      "refinement_template": "Please refine and enhance the original writing requirements in the context of generating content in Academic & Engineering from Academic & Engineering based on the provided guidance. Include as many details as possible and indicate whether additional writing materials are needed.\n\n**Original Writing Requirements**\nDesign and write a detailed lab report for an experiment on fluid dynamics, including the setup, procedure, data analysis, and discussion of results, adhering to standard engineering report format and technical jargon.\n\n**Guidance for Modification**\nInclude format adherence requirements, such as writing according to a prescribed outline or outputting in a specific format. Include more specific content requirements, like details about a particular event or focusing on specific content.\n\n**Output Requirements**\nReturn ONLY the following format - nothing else:\n<output>\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"Whether additional reference materials are needed to supplement the writing requirements. If needed, provide suggestions for the materials; if not needed, return empty string\"\n}\n</output>",
+      "criteria_template": "Please generate five strict evaluation criteria for assessing the response given the following query. Each criterion should include the following fields: name, criteria_description, 1-2, 3-4, 5-6, 7-8, 9-10.\n\nThe criteria should be designed to emphasize detailed assessment and distinguish subtle differences in quality. Ensure that the criteria can discern issues such as relevance, coherence, depth, specificity, and adherence to the query context.\n\n**Query**\n ```json\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"No additional materials are needed\"\n}\n```\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  {\n    \"name\": \"first_criteria_name\",\n    \"criteria_description\": \"Description for the first criteria, emphasizing detailed and critical assessment.\",\n    \"1-2\": \"Low score description: Critical deficiencies and major issues that prevent adequate functionality.\",\n    \"3-4\": \"Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.\",\n    \"5-6\": \"Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements. Most models may achieve this score.\",\n    \"7-8\": \"Above average score description: Strong performance characterized by competent execution, though minor refinements are needed to achieve excellence.\",\n    \"9-10\": \"High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness and quality without any flaws.\"\n  },\n  ...\n]\n</output>",
+      "initial_query": "Design and write a detailed lab report for an experiment on fluid dynamics, including the setup, procedure, data analysis, and discussion of results, adhering to standard engineering report format and technical jargon.",
+      "refined_query": " ```json\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"No additional materials are needed\"\n}\n```",
+      "initial_query_format_score": 1,
+      "refined_query_format_score": -1,
+      "criteria_format_score": -1,
+      "requirements": {
+        "style": null,
+        "format": null,
+        "length": null
+      },
+      "evaluation_criteria": null,
+      "num_criteria": 5,
+      "language": "English",
+      "guidance_applied": [
+        "Include format adherence requirements, such as writing according to a prescribed outline or outputting in a specific format.",
+        "Include more specific content requirements, like details about a particular event or focusing on specific content."
+      ],
+      "seed": 42
+    }
+  ]
+}

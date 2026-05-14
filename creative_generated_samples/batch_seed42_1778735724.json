@@ -1,0 +1,392 @@
+{
+  "batch_id": "batch_seed42_1778735724",
+  "num_prompts": 5,
+  "domains_sampled": [
+    "D6",
+    "D2",
+    "D5",
+    "D1"
+  ],
+  "subdomains_sampled": [
+    "Product Description",
+    "Human Resource Management",
+    "Email Marketing",
+    "Curriculum Design",
+    "Experiments"
+  ],
+  "generation_log": {
+    "total_attempted": 5,
+    "total_generated": 5,
+    "json_parse_failures": 0,
+    "network_failures": 0,
+    "skipped": 0,
+    "error_details": []
+  },
+  "prompts": [
+    {
+      "prompt_id": "prompt_0001",
+      "domain": "D6",
+      "domain_name": "Advertising & Marketing",
+      "subdomain": "Product Description",
+      "initial_query_template": "Generate 1 different writing requests under Product Description within the context of Advertising & Marketing in English. Ensure the requests are as detailed and specific as possible, and reflect realistic user tone and needs.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  \"Writing request 1\",\n  \"Writing request 2\",\n  ...\n]\n</output>",
+      "refinement_template": "Please refine and enhance the original writing requirements in the context of generating content in Advertising & Marketing from Advertising & Marketing based on the provided guidance. Include as many details as possible and indicate whether additional writing materials are needed.\n\n**Original Writing Requirements**\nWrite a product description for a new line of eco-friendly reusable food storage bags that emphasizes their sustainability, durability, and convenience, suitable for use in various settings such as home, school, and outdoor activities.\n\n**Guidance for Modification**\nAdd a requirement for generating specific lengths. Add style requirements, like drafting a speech suitable for a particular occasion or adopting the style suitable for a specific audience or mimicking a particular tone.\n\n**Output Requirements**\nReturn ONLY the following format - nothing else:\n<output>\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"Whether additional reference materials are needed to supplement the writing requirements. If needed, provide suggestions for the materials; if not needed, return empty string\"\n}\n</output>",
+      "criteria_template": "Please generate five strict evaluation criteria for assessing the response given the following query. Each criterion should include the following fields: name, criteria_description, 1-2, 3-4, 5-6, 7-8, 9-10.\n\nThe criteria should be designed to emphasize detailed assessment and distinguish subtle differences in quality. Ensure that the criteria can discern issues such as relevance, coherence, depth, specificity, and adherence to the query context.\n\n**Query**\nModified writing requirements\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  {\n    \"name\": \"first_criteria_name\",\n    \"criteria_description\": \"Description for the first criteria, emphasizing detailed and critical assessment.\",\n    \"1-2\": \"Low score description: Critical deficiencies and major issues that prevent adequate functionality.\",\n    \"3-4\": \"Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.\",\n    \"5-6\": \"Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements. Most models may achieve this score.\",\n    \"7-8\": \"Above average score description: Strong performance characterized by competent execution, though minor refinements are needed to achieve excellence.\",\n    \"9-10\": \"High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness and quality without any flaws.\"\n  },\n  ...\n]\n</output>",
+      "initial_query": "Write a product description for a new line of eco-friendly reusable food storage bags that emphasizes their sustainability, durability, and convenience, suitable for use in various settings such as home, school, and outdoor activities.",
+      "refined_query": "Modified writing requirements",
+      "initial_query_format_score": 1,
+      "refined_query_format_score": 1,
+      "criteria_format_score": 1,
+      "requirements": {
+        "style": null,
+        "format": null,
+        "length": null
+      },
+      "evaluation_criteria": [
+        {
+          "name": "Relevance and Contextual Accuracy",
+          "criteria_description": "The response's relevance to the query and its ability to accurately address the context and specifics of the modified writing requirements.",
+          "1-2": "Response is completely off-topic and irrelevant to the query, with significant errors in context and detail.",
+          "3-4": "Response is somewhat relevant but with noticeable inaccuracies or omissions, impacting the overall clarity and adherence to the query.",
+          "5-6": "Response is generally relevant and accurate but with minor issues that affect the completeness and precision of the information provided.",
+          "7-8": "Response is highly relevant and accurate, with only minor areas that could be further clarified or expanded upon.",
+          "9-10": "Response is perfectly aligned with the query, providing comprehensive and precise details that fully address all aspects of the modified writing requirements."
+        },
+        {
+          "name": "Coherence and Logical Flow",
+          "criteria_description": "The clarity and logical progression of the response, ensuring that ideas are presented in a coherent manner and seamlessly transition from one point to the next.",
+          "1-2": "Response is disjointed with poor logical flow, making it difficult to follow and understand the points being made.",
+          "3-4": "Response is somewhat coherent but with noticeable gaps in logic or unclear transitions between ideas.",
+          "5-6": "Response is generally coherent with minor disruptions in logical flow that could be improved.",
+          "7-8": "Response demonstrates strong coherence and logical flow, with clear and well-structured transitions between points.",
+          "9-10": "Response is exceptionally coherent, with a seamless and tightly logical flow that enhances the readability and impact of the content."
+        },
+        {
+          "name": "Depth and Specificity",
+          "criteria_description": "The level of detail and specificity in addressing the query, indicating a thorough understanding of the modified writing requirements.",
+          "1-2": "Response is superficial and lacks detail, failing to provide a comprehensive understanding of the query.",
+          "3-4": "Response offers basic details but is incomplete or lacks specific examples, hindering a full grasp of the requirements.",
+          "5-6": "Response is adequately detailed but with limited specificity, leaving room for further clarification or expansion.",
+          "7-8": "Response is detailed and specific, addressing the query comprehensively with relevant examples and supporting details.",
+          "9-10": "Response is exceptionally detailed and specific, providing a thorough and nuanced understanding of the modified writing requirements."
+        },
+        {
+          "name": "Adherence to Query Context",
+          "criteria_description": "The extent to which the response stays within the context of the query, ensuring all aspects of the modified writing requirements are appropriately addressed.",
+          "1-2": "Response deviates significantly from the query context, with parts that are irrelevant or off-topic.",
+          "3-4": "Response mostly stays on topic but with occasional deviations that impact the relevance and coherence of the answer.",
+          "5-6": "Response is generally on topic with minor deviations that could be corrected for better adherence to the query.",
+          "7-8": "Response closely adheres to the query context, with only minor areas that could be further aligned.",
+          "9-10": "Response perfectly adheres to the query context, addressing all aspects of the modified writing requirements with complete and appropriate relevance."
+        },
+        {
+          "name": "Clarity and Precision",
+          "criteria_description": "The clarity and precision of the language used in the response, ensuring that it is easy to understand and free from ambiguity.",
+          "1-2": "Response is unclear and ambiguous, with significant confusion in meaning and understanding.",
+          "3-4": "Response is somewhat clear but with noticeable ambiguity, making it challenging to interpret.",
+          "5-6": "Response is generally clear but with minor ambiguities that could be clarified for better understanding.",
+          "7-8": "Response is clear and precise, with no major issues that hinder comprehension.",
+          "9-10": "Response is exceptionally clear and precise, with a polished and unambiguous style that enhances readability and understanding."
+        }
+      ],
+      "num_criteria": 5,
+      "language": "English",
+      "guidance_applied": [
+        "Add a requirement for generating specific lengths.",
+        "Add style requirements, like drafting a speech suitable for a particular occasion or adopting the style suitable for a specific audience or mimicking a particular tone."
+      ],
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0002",
+      "domain": "D2",
+      "domain_name": "Finance & Business",
+      "subdomain": "Human Resource Management",
+      "initial_query_template": "Generate 1 different writing requests under Human Resource Management within the context of Finance & Business in English. Ensure the requests are as detailed and specific as possible, and reflect realistic user tone and needs.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  \"Writing request 1\",\n  \"Writing request 2\",\n  ...\n]\n</output>",
+      "refinement_template": "Please refine and enhance the original writing requirements in the context of generating content in Finance & Business from Finance & Business based on the provided guidance. Include as many details as possible and indicate whether additional writing materials are needed.\n\n**Original Writing Requirements**\nI need an analysis report on the impact of implementing a remote work policy on employee productivity and satisfaction in our company, highlighting potential benefits and challenges, and offering recommendations for a balanced approach to hybrid work arrangements.\n\n**Guidance for Modification**\nInclude format adherence requirements, such as writing according to a prescribed outline or outputting in a specific format. Add a requirement for generating specific lengths.\n\n**Output Requirements**\nReturn ONLY the following format - nothing else:\n<output>\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"Whether additional reference materials are needed to supplement the writing requirements. If needed, provide suggestions for the materials; if not needed, return empty string\"\n}\n</output>",
+      "criteria_template": "Please generate five strict evaluation criteria for assessing the response given the following query. Each criterion should include the following fields: name, criteria_description, 1-2, 3-4, 5-6, 7-8, 9-10.\n\nThe criteria should be designed to emphasize detailed assessment and distinguish subtle differences in quality. Ensure that the criteria can discern issues such as relevance, coherence, depth, specificity, and adherence to the query context.\n\n**Query**\nGenerate a detailed analysis report on the impact of implementing a remote work policy on employee productivity and satisfaction in the company. The report should include an outline and adhere to a specific format. Use a balanced approach to hybrid work arrangements. Provide recommendations for a balanced approach and discuss potential benefits and challenges.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  {\n    \"name\": \"first_criteria_name\",\n    \"criteria_description\": \"Description for the first criteria, emphasizing detailed and critical assessment.\",\n    \"1-2\": \"Low score description: Critical deficiencies and major issues that prevent adequate functionality.\",\n    \"3-4\": \"Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.\",\n    \"5-6\": \"Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements. Most models may achieve this score.\",\n    \"7-8\": \"Above average score description: Strong performance characterized by competent execution, though minor refinements are needed to achieve excellence.\",\n    \"9-10\": \"High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness and quality without any flaws.\"\n  },\n  ...\n]\n</output>",
+      "initial_query": "I need an analysis report on the impact of implementing a remote work policy on employee productivity and satisfaction in our company, highlighting potential benefits and challenges, and offering recommendations for a balanced approach to hybrid work arrangements.",
+      "refined_query": "Generate a detailed analysis report on the impact of implementing a remote work policy on employee productivity and satisfaction in the company. The report should include an outline and adhere to a specific format. Use a balanced approach to hybrid work arrangements. Provide recommendations for a balanced approach and discuss potential benefits and challenges.",
+      "initial_query_format_score": 1,
+      "refined_query_format_score": 1,
+      "criteria_format_score": 1,
+      "requirements": {
+        "style": null,
+        "format": "Inferred from query",
+        "length": null
+      },
+      "evaluation_criteria": [
+        {
+          "name": "Query Clarity and Specificity",
+          "criteria_description": "This criterion evaluates how accurately the response addresses the core aspects of the query, highlighting the need for precision and adherence to the query's essence.",
+          "1-2": "Critically underperforms, entirely misinterprets or ignores key points of the query, and lacks coherence. The response misses essential elements and fails to address the core objectives.",
+          "3-4": "Significantly misaligns with the query's intent, demonstrating a lack of understanding or underestimation of the query's requirements. The response has major gaps and does not meet the necessary standards.",
+          "5-6": "Generally addresses the query but exhibits limitations in depth or detail. The response covers essential points but falls short in providing a comprehensive understanding or in-depth analysis.",
+          "7-8": "Effectively addresses the query with a good grasp of its elements, though minor areas could benefit from further elaboration. The response is mostly thorough and provides a satisfactory level of detail.",
+          "9-10": "Excellently captures the essence of the query with precision and depth. The response is flawless in addressing all aspects, demonstrating a profound understanding and comprehensive coverage."
+        },
+        {
+          "name": "Relevance and Contextual Appropriateness",
+          "criteria_description": "This criterion assesses how well the response aligns with the provided context and query, ensuring that all content is relevant to the situation described.",
+          "1-2": "Irrelevant content is prevalent, and the response deviates significantly from the context and query's requirements, making it almost unusable.",
+          "3-4": "The response is somewhat relevant but includes a mix of content that is contextually inappropriate, leading to a fragmented or confusing analysis.",
+          "5-6": "Mostly relevant with a few elements that are marginally or contextually irrelevant. The response is generally appropriate but could be refined for better focus.",
+          "7-8": "Consistently relevant to the context and query, with only minor irrelevant sections that do not significantly detract from the overall effectiveness.",
+          "9-10": "The response is impeccably tailored to the context and query, with every element perfectly aligned and fully relevant to the given situation."
+        },
+        {
+          "name": "Coherence and Flow",
+          "criteria_description": "This criterion measures the continuity and logical progression of the response, ensuring that ideas are presented in a coherent and flowy manner.",
+          "1-2": "The response is highly disjointed, with no clear logical progression between ideas. Readability is poor, and it is challenging to follow the flow of information.",
+          "3-4": "Partially coherent but shows frequent lapses in logical flow. Ideas are not always connected, and the response is difficult to follow in its entirety.",
+          "5-6": "Satisfactorily coherent with some sections that could benefit from better flow. The response is generally followable but has occasional gaps in continuity.",
+          "7-8": "Consistently coherent with smooth transitions between ideas. The response is easy to follow, but minor areas could be improved for even greater fluidity.",
+          "9-10": "Superbly coherent with a seamless and logical flow that enhances readability and comprehension. The response is so well-structured that it is effortlessly understood from beginning to end."
+        },
+        {
+          "name": "Depth and Specificity",
+          "criteria_description": "This criterion examines the level of detail and specificity within the response, ensuring a thorough exploration of the subject matter.",
+          "1-2": "Shallow analysis with minimal depth. The response provides very few specifics and lacks detailed examination of the topic.",
+          "3-4": "Lacks depth with only superficial coverage. The response offers some details but falls short in providing comprehensive or in-depth information.",
+          "5-6": "Generally meets the query's expectations with adequate detail, though it could delve deeper or provide more specific insights.",
+          "7-8": "Demonstrates a good balance of detail and specificity, with thorough examination of the subject matter and useful specifics included.",
+          "9-10": "Exceptionally detailed and specific, with a comprehensive exploration of the subject matter that leaves no aspect unaddressed. The response is thorough and insightful."
+        },
+        {
+          "name": "Format and Structure",
+          "criteria_description": "This criterion evaluates how well the response follows the required format and structure, including the presence of an outline and adherence to specified sections.",
+          "1-2": "Severely deviates from the required format, with no clear outline or structured sections. The response is disorganized and hard to follow.",
+          "3-4": "Largely follows the format but has significant deviations in sectioning or organizational structure. The response is mostly structured but with notable inconsistencies.",
+          "5-6": "Generally adheres to the format with minor organizational issues. The response is largely structured but needs some refinement for complete alignment.",
+          "7-8": "Consistently follows the format with minor adjustments needed for perfect alignment. The response is well-organized and mostly adheres to the required structure.",
+          "9-10": "Perfectly adheres to the format with excellent structure and organization. The response is flawlessly structured and fully aligns with the required format."
+        }
+      ],
+      "num_criteria": 5,
+      "language": "English",
+      "guidance_applied": [
+        "Include format adherence requirements, such as writing according to a prescribed outline or outputting in a specific format.",
+        "Add a requirement for generating specific lengths."
+      ],
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0003",
+      "domain": "D6",
+      "domain_name": "Advertising & Marketing",
+      "subdomain": "Email Marketing",
+      "initial_query_template": "Generate 1 different writing requests under Email Marketing within the context of Advertising & Marketing in English. Ensure the requests are as detailed and specific as possible, and reflect realistic user tone and needs.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  \"Writing request 1\",\n  \"Writing request 2\",\n  ...\n]\n</output>",
+      "refinement_template": "Please refine and enhance the original writing requirements in the context of generating content in Advertising & Marketing from Advertising & Marketing based on the provided guidance. Include as many details as possible and indicate whether additional writing materials are needed.\n\n**Original Writing Requirements**\nWrite a compelling email campaign to promote a new line of sustainable home goods. The tone should be eco-conscious and persuasive, highlighting the benefits of the products. Use a call-to-action to encourage recipients to purchase immediately.\n\n**Guidance for Modification**\nInclude more specific content requirements, like details about a particular event or focusing on specific content. Add a requirement for generating specific lengths.\n\n**Output Requirements**\nReturn ONLY the following format - nothing else:\n<output>\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"Whether additional reference materials are needed to supplement the writing requirements. If needed, provide suggestions for the materials; if not needed, return empty string\"\n}\n</output>",
+      "criteria_template": "Please generate five strict evaluation criteria for assessing the response given the following query. Each criterion should include the following fields: name, criteria_description, 1-2, 3-4, 5-6, 7-8, 9-10.\n\nThe criteria should be designed to emphasize detailed assessment and distinguish subtle differences in quality. Ensure that the criteria can discern issues such as relevance, coherence, depth, specificity, and adherence to the query context.\n\n**Query**\nWrite a compelling email campaign to promote a new line of sustainable home goods, emphasizing their eco-friendly features, versatility, and affordable pricing. The tone should be both eco-conscious and persuasive, with a clear call-to-action encouraging recipients to take advantage of a limited-time discount offer. The campaign should include a mix of informative and emotional content, utilizing data-driven insights to demonstrate the positive impact of sustainable living on the environment and the community. Additionally, the email should feature high-quality product images and a call-to-action button that leads to a dedicated landing page for further exploration and purchase. The email should be optimized for both desktop and mobile devices, with a clear and easy-to-follow format. The length of the email should be between 250-300 words, ensuring that the content is engaging and informative without being overly lengthy. Finally, the email should include a personalized greeting and a thank-you note to enhance the recipient's experience and build a stronger connection with the brand.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  {\n    \"name\": \"first_criteria_name\",\n    \"criteria_description\": \"Description for the first criteria, emphasizing detailed and critical assessment.\",\n    \"1-2\": \"Low score description: Critical deficiencies and major issues that prevent adequate functionality.\",\n    \"3-4\": \"Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.\",\n    \"5-6\": \"Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements. Most models may achieve this score.\",\n    \"7-8\": \"Above average score description: Strong performance characterized by competent execution, though minor refinements are needed to achieve excellence.\",\n    \"9-10\": \"High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness and quality without any flaws.\"\n  },\n  ...\n]\n</output>",
+      "initial_query": "Write a compelling email campaign to promote a new line of sustainable home goods. The tone should be eco-conscious and persuasive, highlighting the benefits of the products. Use a call-to-action to encourage recipients to purchase immediately.",
+      "refined_query": "Write a compelling email campaign to promote a new line of sustainable home goods, emphasizing their eco-friendly features, versatility, and affordable pricing. The tone should be both eco-conscious and persuasive, with a clear call-to-action encouraging recipients to take advantage of a limited-time discount offer. The campaign should include a mix of informative and emotional content, utilizing data-driven insights to demonstrate the positive impact of sustainable living on the environment and the community. Additionally, the email should feature high-quality product images and a call-to-action button that leads to a dedicated landing page for further exploration and purchase. The email should be optimized for both desktop and mobile devices, with a clear and easy-to-follow format. The length of the email should be between 250-300 words, ensuring that the content is engaging and informative without being overly lengthy. Finally, the email should include a personalized greeting and a thank-you note to enhance the recipient's experience and build a stronger connection with the brand.",
+      "initial_query_format_score": 1,
+      "refined_query_format_score": 1,
+      "criteria_format_score": 1,
+      "requirements": {
+        "style": "Inferred from query",
+        "format": "Inferred from query",
+        "length": "Inferred from query"
+      },
+      "evaluation_criteria": [
+        {
+          "name": "Relevance",
+          "criteria_description": "Assesses whether the email content directly addresses the query, highlighting the new line of sustainable home goods with a focus on eco-friendliness, versatility, and affordability. It checks for the inclusion of a call-to-action, personalized greeting, and thank-you note.",
+          "1-2": "Missing key elements such as the eco-friendly features, versatility, or affordability. No clear call-to-action or personalized greeting.",
+          "3-4": "Content is somewhat off-topic or lacks one of the key points, with a weak call-to-action or no personalized greeting.",
+          "5-6": "Email covers the main points but misses a significant detail or has a weak or no call-to-action.",
+          "7-8": "Email is on topic with all key points included, has a strong call-to-action, and includes a personalized greeting.",
+          "9-10": "Email is highly relevant, covers all key points comprehensively, has a compelling call-to-action, includes a personalized greeting, and features a thoughtful thank-you note."
+        },
+        {
+          "name": "Coherence",
+          "criteria_description": "Evaluates the logical flow and readability of the email. This includes proper transitions, clear paragraphs, and a logical sequence of information that guides the reader through the eco-friendly aspects, product benefits, and the call-to-action.",
+          "1-2": "Email lacks coherence, with disjointed sentences, paragraphs that don't flow, or missing transitions.",
+          "3-4": "Email has some issues with coherence, such as minor formatting problems or a lack of clear transitions between sections.",
+          "5-6": "Email is mostly coherent, with some sections that could be better connected or clearer.",
+          "7-8": "Email is coherent, with well-structured paragraphs and clear transitions that guide the reader effectively.",
+          "9-10": "Email is highly coherent, with seamless transitions, clear paragraph breaks, and a logical flow that enhances readability."
+        },
+        {
+          "name": "Depth and Specificity",
+          "criteria_description": "Assesses the level of detail and specificity in the email. It checks for the inclusion of specific examples, data-driven insights, and detailed descriptions of eco-friendly features, product benefits, and the positive impact of sustainable living.",
+          "1-2": "Email lacks depth and specificity, providing only general statements without specific examples or data.",
+          "3-4": "Email has some specific details, but the information is scattered and not well-integrated into the content.",
+          "5-6": "Email has some specific details but misses a significant area of depth, such as eco-friendly features or data-driven insights.",
+          "7-8": "Email is well-detailed with specific examples and data-driven insights, covering all key areas thoroughly.",
+          "9-10": "Email is exceptionally detailed with comprehensive, specific, and well-integrated examples and data-driven insights."
+        },
+        {
+          "name": "Adherence to Context",
+          "criteria_description": "Evaluates whether the email stays true to the query's context, including the eco-conscious tone, the focus on sustainable home goods, and the inclusion of a limited-time discount offer and a call-to-action leading to a dedicated landing page.",
+          "1-2": "Email deviates significantly from the context, missing the eco-conscious tone, the focus on sustainable home goods, or the call-to-action details.",
+          "3-4": "Email partially adheres to the context but has notable deviations, such as a weak eco-conscious tone or missing call-to-action details.",
+          "5-6": "Email mostly adheres to the context with minor deviations, such as a slight change in tone or a weak call-to-action.",
+          "7-8": "Email adheres well to the context, maintaining an eco-conscious tone, focusing on sustainable home goods, and including a strong call-to-action.",
+          "9-10": "Email is perfectly aligned with the query's context, with a strong eco-conscious tone, a clear focus on sustainable home goods, and a compelling call-to-action."
+        },
+        {
+          "name": "Call-to-Action Quality",
+          "criteria_description": "Assesses the effectiveness and persuasiveness of the call-to-action. It checks for a clear, compelling call-to-action that encourages recipients to take advantage of the limited-time discount offer, including details on the discount and a clear path to the landing page.",
+          "1-2": "Email lacks a clear or compelling call-to-action, with no mention of the discount or a path to the landing page.",
+          "3-4": "Email has a weak or unclear call-to-action, with limited detail on the discount or the path to the landing page.",
+          "5-6": "Email has a call-to-action but it is not compelling or clear, with minimal detail on the discount or the path to the landing page.",
+          "7-8": "Email has a strong call-to-action that is clear and compelling, with sufficient detail on the discount and a clear path to the landing page.",
+          "9-10": "Email features an exceptionally strong and persuasive call-to-action with detailed information on the discount and a seamless path to the dedicated landing page."
+        }
+      ],
+      "num_criteria": 5,
+      "language": "English",
+      "guidance_applied": [
+        "Include more specific content requirements, like details about a particular event or focusing on specific content.",
+        "Add a requirement for generating specific lengths."
+      ],
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0004",
+      "domain": "D5",
+      "domain_name": "Education",
+      "subdomain": "Curriculum Design",
+      "initial_query_template": "Generate 1 different writing requests under Curriculum Design within the context of Education in English. Ensure the requests are as detailed and specific as possible, and reflect realistic user tone and needs.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  \"Writing request 1\",\n  \"Writing request 2\",\n  ...\n]\n</output>",
+      "refinement_template": "Please refine and enhance the original writing requirements in the context of generating content in Education from Education based on the provided guidance. Include as many details as possible and indicate whether additional writing materials are needed.\n\n**Original Writing Requirements**\nDesign a sample curriculum for a high school science program that includes modules on biology, chemistry, and physics, with an emphasis on hands-on laboratory experiences and integrating technology. Each module should have clear learning objectives, activities, assessments, and a pacing guide.\n\n**Guidance for Modification**\nAdd a requirement for generating specific lengths. Express concisely in one sentence.\n\n**Output Requirements**\nReturn ONLY the following format - nothing else:\n<output>\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"Whether additional reference materials are needed to supplement the writing requirements. If needed, provide suggestions for the materials; if not needed, return empty string\"\n}\n</output>",
+      "criteria_template": "Please generate five strict evaluation criteria for assessing the response given the following query. Each criterion should include the following fields: name, criteria_description, 1-2, 3-4, 5-6, 7-8, 9-10.\n\nThe criteria should be designed to emphasize detailed assessment and distinguish subtle differences in quality. Ensure that the criteria can discern issues such as relevance, coherence, depth, specificity, and adherence to the query context.\n\n**Query**\nDesign a sample curriculum for a high school science program that includes modules on biology, chemistry, and physics, with an emphasis on hands-on laboratory experiences and integrating technology. Each module should have clear learning objectives, activities, assessments, and a pacing guide. The curriculum should include at least 10 pages of detailed lesson plans, including interactive and multimedia elements.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  {\n    \"name\": \"first_criteria_name\",\n    \"criteria_description\": \"Description for the first criteria, emphasizing detailed and critical assessment.\",\n    \"1-2\": \"Low score description: Critical deficiencies and major issues that prevent adequate functionality.\",\n    \"3-4\": \"Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.\",\n    \"5-6\": \"Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements. Most models may achieve this score.\",\n    \"7-8\": \"Above average score description: Strong performance characterized by competent execution, though minor refinements are needed to achieve excellence.\",\n    \"9-10\": \"High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness and quality without any flaws.\"\n  },\n  ...\n]\n</output>",
+      "initial_query": "Design a sample curriculum for a high school science program that includes modules on biology, chemistry, and physics, with an emphasis on hands-on laboratory experiences and integrating technology. Each module should have clear learning objectives, activities, assessments, and a pacing guide.",
+      "refined_query": "Design a sample curriculum for a high school science program that includes modules on biology, chemistry, and physics, with an emphasis on hands-on laboratory experiences and integrating technology. Each module should have clear learning objectives, activities, assessments, and a pacing guide. The curriculum should include at least 10 pages of detailed lesson plans, including interactive and multimedia elements.",
+      "initial_query_format_score": 1,
+      "refined_query_format_score": 1,
+      "criteria_format_score": 1,
+      "requirements": {
+        "style": null,
+        "format": null,
+        "length": "Inferred from query"
+      },
+      "evaluation_criteria": [
+        {
+          "name": "Relevance to Query",
+          "criteria_description": "Assesses the extent to which the response directly addresses the query regarding the curriculum design, including topics covered, approach (hands-on lab, tech integration), and detailed components (lesson plans, activities, assessments, pacing guide).",
+          "1-2": "The response does not address the query or provides irrelevant information. Major gaps or omissions in essential components such as curriculum design, hands-on lab, tech integration, or detailed lesson plans.",
+          "3-4": "The response includes some elements of the query but lacks coherence or significant aspects like specific topics, detailed planning, or practical applications.",
+          "5-6": "The response addresses the core aspects of the query but includes minor gaps or omits specific elements, such as detailed lesson plans or specific activities.",
+          "7-8": "The response closely follows the query\u2019s requirements, covering all required elements but with minor omissions or inconsistencies.",
+          "9-10": "The response fully addresses the query with comprehensive and precise content, including all required components, clear explanations, and practical applications."
+        },
+        {
+          "name": "Coherence and Logical Flow",
+          "criteria_description": "Evaluates the logical structure of the response, ensuring smooth transitions between sections, clear organization of information, and logical progression of ideas.",
+          "1-2": "The response is disorganized, with abrupt jumps, incomplete ideas, or sections that lack coherence.",
+          "3-4": "The response is somewhat coherent, with occasional jumps or unclear sections, but overall maintains a basic logical flow.",
+          "5-6": "The response is logically organized with minimal inconsistencies, but some parts could be smoother or better explained.",
+          "7-8": "The response is well-organized, with a clear logical flow, though some sections could benefit from additional transitions or clarification.",
+          "9-10": "The response is meticulously organized with flawless logical flow, smooth transitions, and clear, coherent presentation."
+        },
+        {
+          "name": "Depth and Detail",
+          "criteria_description": "Assesses the level of detail in the response, including comprehensive explanations, specific examples, and thorough coverage of all requested components.",
+          "1-2": "The response is superficial, with very limited detail or only mentioning key topics without sufficient elaboration.",
+          "3-4": "The response provides some detail but lacks depth, with examples or explanations that are too brief or insufficient.",
+          "5-6": "The response is detailed enough but lacks in-depth analysis or specific examples, covering only basic aspects of the query.",
+          "7-8": "The response is detailed and includes specific examples and analyses, but some components lack thoroughness.",
+          "9-10": "The response is exceptionally detailed, with comprehensive explanations, specific examples, and thorough analysis across all components."
+        },
+        {
+          "name": "Specificity and Precision",
+          "criteria_description": "Evaluates how specific and precise the response is, ensuring accurate information, clear distinctions, and targeted answers.",
+          "1-2": "The response is vague and general, with unclear or inaccurate information and no specific examples or distinctions.",
+          "3-4": "The response is somewhat specific but contains inaccuracies, unclear distinctions, or lack of precise examples.",
+          "5-6": "The response is fairly specific, with some inaccuracies or imprecise language, though it covers the main points.",
+          "7-8": "The response is precise, with clear distinctions and specific examples, though some areas could be more detailed.",
+          "9-10": "The response is highly specific, precise, and accurate, with clear distinctions, specific examples, and no inaccuracies."
+        },
+        {
+          "name": "Adherence to Query Context",
+          "criteria_description": "Assesses how well the response aligns with the query\u2019s requirements, including the emphasis on hands-on labs, tech integration, and detailed lesson plans.",
+          "1-2": "The response ignores or fails to address key aspects of the query, such as hands-on labs, tech integration, or detailed lesson plans.",
+          "3-4": "The response touches on some aspects but does not fully adhere to the query\u2019s requirements or lacks emphasis on key components.",
+          "5-6": "The response adheres to the query\u2019s requirements but with minor omissions or lacks emphasis on specific aspects like tech integration or hands-on labs.",
+          "7-8": "The response generally adheres to the query\u2019s requirements but could include more detailed examples or further integration of the specified elements.",
+          "9-10": "The response fully adheres to the query\u2019s requirements, emphasizing hands-on labs, tech integration, and detailed lesson plans with comprehensive examples and explanations."
+        }
+      ],
+      "num_criteria": 5,
+      "language": "English",
+      "guidance_applied": [
+        "Add a requirement for generating specific lengths.",
+        "Express concisely in one sentence."
+      ],
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0005",
+      "domain": "D1",
+      "domain_name": "Academic & Engineering",
+      "subdomain": "Experiments",
+      "initial_query_template": "Generate 1 different writing requests under Experiments within the context of Academic & Engineering in English. Ensure the requests are as detailed and specific as possible, and reflect realistic user tone and needs.\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  \"Writing request 1\",\n  \"Writing request 2\",\n  ...\n]\n</output>",
+      "refinement_template": "Please refine and enhance the original writing requirements in the context of generating content in Academic & Engineering from Academic & Engineering based on the provided guidance. Include as many details as possible and indicate whether additional writing materials are needed.\n\n**Original Writing Requirements**\nHow to design and execute a controlled experiment to test the effect of different types of fertilizers on plant growth over a 30-day period in a greenhouse setting?\n\n**Guidance for Modification**\nInclude format adherence requirements, such as writing according to a prescribed outline or outputting in a specific format. Include more specific content requirements, like details about a particular event or focusing on specific content.\n\n**Output Requirements**\nReturn ONLY the following format - nothing else:\n<output>\n{\n  \"query\": \"Modified writing requirements\",\n  \"material\": \"Whether additional reference materials are needed to supplement the writing requirements. If needed, provide suggestions for the materials; if not needed, return empty string\"\n}\n</output>",
+      "criteria_template": "Please generate five strict evaluation criteria for assessing the response given the following query. Each criterion should include the following fields: name, criteria_description, 1-2, 3-4, 5-6, 7-8, 9-10.\n\nThe criteria should be designed to emphasize detailed assessment and distinguish subtle differences in quality. Ensure that the criteria can discern issues such as relevance, coherence, depth, specificity, and adherence to the query context.\n\n**Query**\nHow to design and execute a controlled experiment to test the effect of different types of fertilizers on plant growth over a 30-day period in a greenhouse setting, adhering to a scientific methodology outline, and outputting results in a structured report format?\n\nReturn ONLY the following format - nothing else:\n<output>\n[\n  {\n    \"name\": \"first_criteria_name\",\n    \"criteria_description\": \"Description for the first criteria, emphasizing detailed and critical assessment.\",\n    \"1-2\": \"Low score description: Critical deficiencies and major issues that prevent adequate functionality.\",\n    \"3-4\": \"Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.\",\n    \"5-6\": \"Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements. Most models may achieve this score.\",\n    \"7-8\": \"Above average score description: Strong performance characterized by competent execution, though minor refinements are needed to achieve excellence.\",\n    \"9-10\": \"High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness and quality without any flaws.\"\n  },\n  ...\n]\n</output>",
+      "initial_query": "How to design and execute a controlled experiment to test the effect of different types of fertilizers on plant growth over a 30-day period in a greenhouse setting?",
+      "refined_query": "How to design and execute a controlled experiment to test the effect of different types of fertilizers on plant growth over a 30-day period in a greenhouse setting, adhering to a scientific methodology outline, and outputting results in a structured report format?",
+      "initial_query_format_score": 1,
+      "refined_query_format_score": 1,
+      "criteria_format_score": 1,
+      "requirements": {
+        "style": null,
+        "format": "Inferred from query",
+        "length": null
+      },
+      "evaluation_criteria": [
+        {
+          "name": "Relevance to Query",
+          "criteria_description": "How well the response addresses the specific requirements of the query, including the design of the experiment, execution, adherence to scientific methodology, and structured reporting.",
+          "1-2": "Response fails to address any aspect of the query, providing no relevant information or methodological guidance.",
+          "3-4": "Response partially addresses the query but lacks key elements such as experimental design, methodology, or structured reporting.",
+          "5-6": "Response provides a basic framework for the experiment but omits critical details or methodology.",
+          "7-8": "Response offers a solid outline of the experiment with some details, but could be more comprehensive.",
+          "9-10": "Response is comprehensive, addressing all aspects of the query with detailed methodology and structured reporting."
+        },
+        {
+          "name": "Coherence and Structure",
+          "criteria_description": "How logically structured and coherent the response is, ensuring clarity and flow in the presentation of information.",
+          "1-2": "Response is highly disorganized, with significant gaps in logic and coherence, making it difficult to follow.",
+          "3-4": "Response is somewhat structured but has noticeable gaps or inconsistencies in logic.",
+          "5-6": "Response is generally structured but lacks smooth transitions and clear logical flow.",
+          "7-8": "Response is well-structured with logical flow but could benefit from minor improvements.",
+          "9-10": "Response is exceptionally well-structured, with seamless logic and clear, consistent flow."
+        },
+        {
+          "name": "Depth of Analysis",
+          "criteria_description": "The level of detail and thoroughness in the response, particularly in explaining the experimental design, methodology, and the reasoning behind the proposed approach.",
+          "1-2": "Response lacks detail, providing superficial or incorrect information about the experiment and methodology.",
+          "3-4": "Response has some detail but fails to provide in-depth explanations or critical analysis of the proposed methods.",
+          "5-6": "Response is moderately detailed but could benefit from more comprehensive explanations and analysis.",
+          "7-8": "Response is detailed and well-explained but could include more in-depth analysis or additional context.",
+          "9-10": "Response is exceptionally detailed, providing thorough and insightful analysis of the experimental design and methodology."
+        },
+        {
+          "name": "Specificity of Recommendations",
+          "criteria_description": "The precision and specificity of the recommendations provided, including detailed steps and considerations for the experiment and reporting.",
+          "1-2": "Response provides vague or incorrect recommendations with no specific guidance.",
+          "3-4": "Response offers some specific recommendations but lacks detailed steps or practical considerations.",
+          "5-6": "Response provides basic specific recommendations but could be more detailed and practical.",
+          "7-8": "Response is fairly specific with detailed steps but could be more precise or practical.",
+          "9-10": "Response is highly specific, providing clear and practical recommendations with detailed steps and considerations."
+        },
+        {
+          "name": "Adherence to Scientific Methodology",
+          "criteria_description": "How well the response adheres to established scientific principles and methodologies, including control of variables, data collection, and analysis.",
+          "1-2": "Response ignores or incorrectly applies scientific principles, failing to provide a sound experimental design.",
+          "3-4": "Response has some adherence to scientific principles but includes significant errors or omissions.",
+          "5-6": "Response generally follows scientific principles but could improve in areas such as variable control or data analysis.",
+          "7-8": "Response is mostly aligned with scientific principles but could benefit from more rigorous methodology.",
+          "9-10": "Response adheres perfectly to scientific principles, with a well-designed and rigorous methodology."
+        }
+      ],
+      "num_criteria": 5,
+      "language": "English",
+      "guidance_applied": [
+        "Include format adherence requirements, such as writing according to a prescribed outline or outputting in a specific format.",
+        "Include more specific content requirements, like details about a particular event or focusing on specific content."
+      ],
+      "seed": 42
+    }
+  ]
+}
