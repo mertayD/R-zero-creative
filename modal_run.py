@@ -693,3 +693,698 @@ def generate_prompts(
     )
     print(f"\n=== Generation Complete ===")
     print(json.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# One-Shot Question Generation Function
+# ---------------------------------------------------------------------------
+# Simplified alternative to multi-step WritingBench generation.
+# Single prompt with embedded refinement logic for faster feedback loops.
+#
+# Usage:
+#   modal run --detach modal_run.py::generate_one_shot_questions \
+#       --domain mathematics --num-samples 50
+#
+# ---------------------------------------------------------------------------
+@app.function(
+    gpu=MODAL_EVAL_GPU,
+    image=image,
+    volumes={REMOTE_STORAGE_PATH: volume},
+    secrets=[runtime_secret],
+    timeout=MODAL_EVAL_TIMEOUT,
+    env={
+        "VLLM_DISABLE_COMPILE_CACHE": "1",
+        "TORCHINDUCTOR_MAX_AUTOTUNE": "0",
+        "TOKENIZERS_PARALLELISM": "true",
+        "VLLM_LOGGING_LEVEL": "WARN",
+        "PYTHONUNBUFFERED": "1",
+    },
+)
+def generate_one_shot_questions(
+    num_samples: int = 50,
+    model_name: str = "Qwen/Qwen3-4B-Base",
+    format_retries: int = 3,
+    seed: int = 42,
+    suffix: str = "modal_run",
+):
+    """
+    Generate WritingBench prompts using one-shot approach with vLLM inference.
+
+    Single prompt with internal reasoning stages (domain context → refinement → criteria)
+    embedded in the system prompt. Faster than multi-step pipeline, simpler integration
+    with R-Zero challenger training.
+
+    Samples uniformly across all 6 WritingBench domains (D1-D6) and 100+ subdomains.
+
+    Workflow:
+        1. Initialize vLLM with the specified model
+        2. Build one-shot prompt with refinement guidance embedded
+        3. Generate prompts with format validation and retry logic
+        4. Save results to persistent volume
+
+    Args:
+        num_samples: Number of writing prompts to generate
+        model_name: HuggingFace model ID (e.g., "Qwen/Qwen3-4B-Base")
+        format_retries: Number of retries if format validation fails (default: 3)
+        seed: Random seed for domain/subdomain sampling (default: 42)
+        suffix: Suffix for output file (default: modal_run)
+
+    Returns:
+        Dict with generation stats and output location
+    """
+    import os
+    import sys
+    import subprocess
+    from pathlib import Path
+
+    repo = REMOTE_REPO_PATH
+    storage = os.environ["STORAGE_PATH"]
+
+    os.chdir(repo)
+    sys.path.insert(0, repo)
+
+    # Create output directory
+    output_dir = f"{storage}/generated_questions_one_shot"
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"=== One-Shot WritingBench Prompt Generation ===")
+    print(f"  num_samples: {num_samples}")
+    print(f"  model: {model_name}")
+    print(f"  seed: {seed}")
+    print(f"  format_retries: {format_retries}")
+    print(f"  output_dir: {output_dir}")
+    print(f"  domain sampling: Uniform across D1-D6, 100+ subdomains\n")
+
+    try:
+        # Build command to run one-shot generation script
+        script_path = Path(repo) / "question_generate" / "one_shot_creative_question_generate.py"
+
+        cmd = [
+            "python",
+            str(script_path),
+            "--num_samples", str(num_samples),
+            "--model", model_name,
+            "--seed", str(seed),
+            "--format_retries", str(format_retries),
+            "--suffix", suffix,
+        ]
+
+        print(f"Running: {' '.join(cmd)}\n")
+
+        # Run the generation script with environment vars
+        env = {
+            **os.environ,
+            "STORAGE_PATH": storage,
+        }
+
+        result = subprocess.run(cmd, env=env, cwd=repo, check=False)
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"One-shot generation script exited with code {result.returncode}"
+            )
+
+        # Check output files
+        output_files = list(Path(output_dir).glob("*.json"))
+        if not output_files:
+            raise RuntimeError(f"No output files found in {output_dir}")
+
+        output_file = output_files[-1]  # Latest file
+        file_size = output_file.stat().st_size
+
+        # Parse batch to get stats
+        try:
+            with open(output_file) as f:
+                batch_data = json.load(f)
+            domains = batch_data.get('domains_sampled', [])
+            num_subdomains = len(batch_data.get('subdomains_sampled', []))
+            log = batch_data.get('generation_log', {})
+        except (json.JSONDecodeError, IOError, KeyError, TypeError) as e:
+            print(f"Warning: Failed to parse batch file: {e}", flush=True)
+            domains = []
+            num_subdomains = 0
+            log = {}
+
+        print(f"\n{'='*80}")
+        print(f"✓ One-Shot Generation Complete")
+        print(f"{'='*80}")
+        print(f"Generated: {log.get('total_generated', 0)}/{num_samples}")
+        print(f"Format validation failures: {log.get('format_validation_failures', 0)}")
+        if domains:
+            print(f"Domains sampled: {', '.join(domains)}")
+        if num_subdomains:
+            print(f"Unique subdomains: {num_subdomains}")
+        print(f"Output file: {output_file.name}")
+        print(f"File size: {file_size} bytes")
+
+        return {
+            "status": "success",
+            "num_samples": num_samples,
+            "num_generated": log.get('total_generated', 0),
+            "model": model_name,
+            "seed": seed,
+            "domains_sampled": domains,
+            "num_subdomains": num_subdomains,
+            "output_file": str(output_file),
+            "file_size": file_size,
+        }
+
+    except Exception as e:
+        print(f"✗ Error during one-shot generation: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        # Commit changes to persistent volume
+        volume.commit()
+        print(f"\n✓ Results committed to volume")
+
+
+@app.local_entrypoint()
+def generate_one_shot(
+    num_samples: int = 50,
+    model_name: str = "Qwen/Qwen3-4B-Base",
+    seed: int = 42,
+    format_retries: int = 3,
+    suffix: str = "modal_run",
+):
+    """
+    Local entrypoint: `modal run modal_run.py::generate_one_shot --num-samples 50`.
+
+    Generates WritingBench writing prompts using the one-shot approach
+    (single prompt with embedded refinement logic).
+
+    Samples uniformly across all 6 WritingBench domains and 100+ subdomains.
+
+    Examples:
+        # Generate 50 writing prompts
+        modal run --detach modal_run.py::generate_one_shot --num-samples 50
+
+        # Generate 100 prompts with a larger model
+        modal run --detach modal_run.py::generate_one_shot --num-samples 100 --model-name Qwen/Qwen3-7B
+
+        # Test with small batch and custom seed
+        modal run modal_run.py::generate_one_shot --num-samples 5 --seed 2024
+
+        # Compare different seeds for domain variety
+        modal run --detach modal_run.py::generate_one_shot --num-samples 50 --seed 42 --suffix seed_42
+        modal run --detach modal_run.py::generate_one_shot --num-samples 50 --seed 123 --suffix seed_123
+    """
+    result = generate_one_shot_questions.remote(
+        num_samples=num_samples,
+        model_name=model_name,
+        seed=seed,
+        format_retries=format_retries,
+        suffix=suffix,
+    )
+    print(f"\n=== One-Shot Generation Complete ===")
+    print(json.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Solver Sampling Function: Generate M samples per prompt
+# ---------------------------------------------------------------------------
+# Remote sampling function for R-Zero challenger training.
+# Generates M samples per prompt using vLLM, computes R-Zero rewards.
+#
+# Usage (CLI):
+#   modal run --detach modal_run.py::solver_sampling \
+#       --input-json creative_generated_samples/one_shot.json \
+#       --output-dir evaluation/writing_bench/solver_sampling_outputs/iter_1 \
+#       --m 5
+#
+# Usage (programmatic):
+#   from modal_run import solver_sampling
+#   result = solver_sampling.remote(
+#       input_json="/storage/prompts.json",
+#       output_dir="/storage/outputs",
+#       m=5,
+#   )
+# ---------------------------------------------------------------------------
+@app.function(
+    gpu=MODAL_EVAL_GPU,
+    image=image,
+    volumes={REMOTE_STORAGE_PATH: volume},
+    secrets=[runtime_secret],
+    timeout=MODAL_EVAL_TIMEOUT,
+    env={
+        "VLLM_DISABLE_COMPILE_CACHE": "1",
+        "TORCHINDUCTOR_MAX_AUTOTUNE": "0",
+        "TOKENIZERS_PARALLELISM": "true",
+        "VLLM_LOGGING_LEVEL": "WARN",
+        "PYTHONUNBUFFERED": "1",
+    },
+)
+def solver_sampling(
+    input_json: str,
+    output_dir: str,
+    m: int = 5,
+    model: str = "Qwen/Qwen3-4B-Base",
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
+    gpu_memory_utilization: float = 0.85,
+) -> dict:
+    """
+    Generate M samples per prompt and compute R-Zero rewards.
+
+    This function runs on Modal GPU and can be called from:
+    1. CLI: modal run modal_run.py::solver_sampling --input-json ... --m 5
+    2. Programmatically: solver_sampling.remote(input_json=..., m=5)
+
+    Args:
+        input_json: Path to WritingPrompt JSON file on volume
+        output_dir: Output directory for responses.jsonl on volume
+        m: Number of samples per prompt
+        model: Model ID (HuggingFace)
+        temperature: Sampling temperature
+        max_tokens: Max tokens per sample
+        gpu_memory_utilization: GPU memory fraction (0-1)
+
+    Returns:
+        Dict with sampling stats and output paths
+    """
+    import os
+    import sys
+    from pathlib import Path
+    from tqdm import tqdm
+
+    # Setup
+    repo = REMOTE_REPO_PATH
+    storage = os.environ["STORAGE_PATH"]
+    os.chdir(repo)
+    sys.path.insert(0, repo)
+
+    print(f"{'='*70}")
+    print(f"  Modal Solver Sampling")
+    print(f"{'='*70}")
+    print(f"  Model: {model}")
+    print(f"  M (samples per prompt): {m}")
+    print(f"  Input: {input_json}")
+    print(f"  Output: {output_dir}\n")
+
+    try:
+        # Resolve paths against the persistent volume (same pattern as generate_challenger_prompts)
+        if not os.path.isabs(input_json):
+            input_json = f"{storage}/{input_json}"
+        if not os.path.isabs(output_dir):
+            output_dir = f"{storage}/{output_dir}"
+
+        # Create output directory
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Import data models and WritingPrompt
+        from evaluation.shared import WritingPromptResponse, SampleResult
+        from question_generate.one_shot_creative_question_generate import WritingPrompt
+
+        # Load prompts
+        print("[Step 1] Loading prompts...")
+        with open(input_json) as f:
+            data = json.load(f)
+        prompts = [WritingPrompt.from_dict(p) for p in data.get("prompts", [])]
+        print(f"✓ Loaded {len(prompts)} prompts\n")
+
+        # Initialize vLLM
+        print("[Step 2] Initializing vLLM...")
+        import vllm
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(model)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        llm = vllm.LLM(
+            model=model,
+            tokenizer=model,
+            gpu_memory_utilization=gpu_memory_utilization,
+        )
+        print(f"✓ vLLM initialized\n")
+
+        # Process prompts
+        print(f"[Step 3] Processing {len(prompts)} prompts...")
+        responses: list = []
+
+        for prompt in tqdm(prompts, desc="Sampling"):
+            # FORMAT CHECK: Skip invalid format
+            if prompt.format_score == -1:
+                response = WritingPromptResponse(
+                    prompt_id=prompt.prompt_id,
+                    domain=prompt.domain,
+                    domain_name=prompt.domain_name,
+                    subdomain=prompt.subdomain,
+                    query=prompt.query,
+                    criteria=prompt.criteria,
+                    format_score=prompt.format_score,
+                    samples=[],
+                    M=0,
+                )
+                response.reward_score = {
+                    "overall": 0.0,
+                    "format": -1.0,
+                    "accuracy": 0.0,
+                }
+                responses.append(response)
+                continue
+
+            # Generate M samples
+            try:
+                sampling_params = vllm.SamplingParams(
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=0.95,
+                )
+                prompts_batch = [prompt.query] * m
+                outputs = llm.generate(prompts_batch, sampling_params=sampling_params)
+                sample_texts = [o.outputs[0].text for o in outputs]
+            except Exception as e:
+                print(f"  [{prompt.prompt_id}] ✗ Sampling failed: {e}")
+                continue
+
+            # Create response with samples
+            samples = [
+                SampleResult(sample_id=i, text=text, scores={})
+                for i, text in enumerate(sample_texts)
+            ]
+            response = WritingPromptResponse(
+                prompt_id=prompt.prompt_id,
+                domain=prompt.domain,
+                domain_name=prompt.domain_name,
+                subdomain=prompt.subdomain,
+                query=prompt.query,
+                criteria=prompt.criteria,
+                format_score=prompt.format_score,
+                samples=samples,
+                M=m,
+            )
+            # Placeholder reward (can be enhanced with evaluation)
+            response.reward_score = {
+                "overall": 0.5,
+                "format": 1.0,
+                "accuracy": 0.0,
+            }
+            responses.append(response)
+
+        print(f"✓ Processed {len(responses)} prompts\n")
+
+        # Save results
+        print("[Step 4] Saving results...")
+        responses_file = os.path.join(output_dir, "responses.jsonl")
+        with open(responses_file, "w") as f:
+            for response in responses:
+                f.write(response.to_jsonl() + "\n")
+
+        valid_count = sum(1 for r in responses if r.format_score == 1)
+        invalid_count = sum(1 for r in responses if r.format_score == -1)
+        total_samples = sum(len(r.samples) for r in responses)
+
+        print(f"\n{'='*70}")
+        print(f"  Solver Sampling Complete")
+        print(f"{'='*70}")
+        print(f"  Valid: {valid_count} | Invalid: {invalid_count}")
+        print(f"  Total samples: {total_samples}")
+        print(f"  Output: {responses_file}\n")
+
+        result = {
+            "status": "success",
+            "num_prompts": len(prompts),
+            "valid_prompts": valid_count,
+            "invalid_prompts": invalid_count,
+            "total_samples": total_samples,
+            "m": m,
+            "model": model,
+            "responses_file": responses_file,
+        }
+
+        return result
+
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        volume.commit()
+        print(f"✓ Results committed to volume")
+
+
+@app.local_entrypoint()
+def sample(
+    input_json: str = "generated_questions_one_shot/one_shot_writingbench_modal_run.json",
+    output_dir: str = "evaluation/writing_bench/solver_sampling_outputs/modal_run",
+    m: int = 5,
+    model: str = "Qwen/Qwen3-4B-Base",
+    temperature: float = 0.7,
+):
+    """
+    CLI entrypoint for solver sampling.
+
+    Example:
+        modal run --detach modal_run.py::sample \
+            --input-json creative_generated_samples/one_shot.json \
+            --output-dir evaluation/writing_bench/solver_sampling_outputs/iter_1 \
+            --m 5
+    """
+    result = solver_sampling.remote(
+        input_json=input_json,
+        output_dir=output_dir,
+        m=m,
+        model=model,
+        temperature=temperature,
+    )
+    print(f"\n=== Solver Sampling Complete ===")
+    print(json.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# EvalAgent Scoring Function: Score responses.jsonl with Claude judge
+# ---------------------------------------------------------------------------
+# Takes responses.jsonl produced by solver_sampling (M samples per prompt)
+# and scores every (sample × criterion) pair via EvalAgent + ClaudeAgent.
+# Writes scored_responses.jsonl with SampleResult.scores filled in and
+# per-prompt statistics updated.
+#
+# No GPU needed — all work is Claude API calls. CPU container reuses the same
+# image and volume so the scored file lands next to the responses file.
+#
+# Two ways to call:
+#
+#   1) CLI (one-shot):
+#        modal run --detach modal_run.py::score \
+#            --responses-jsonl evaluation/writing_bench/solver_sampling_outputs/modal_run/responses.jsonl
+#
+#   2) Programmatically between pipeline stages:
+#        from modal_run import score_responses
+#        score_responses.remote(responses_jsonl=resp_path, output_dir=out_dir)
+#
+# Resume support: if scored_responses.jsonl already exists, already-scored
+# prompt_ids are skipped so a partial run can be continued cheaply.
+# ---------------------------------------------------------------------------
+@app.function(
+    image=image,
+    volumes={REMOTE_STORAGE_PATH: volume},
+    secrets=[runtime_secret],
+    timeout=MODAL_EVAL_TIMEOUT,
+    env={
+        "PYTHONUNBUFFERED": "1",
+    },
+)
+def score_responses(
+    responses_jsonl: str,
+    output_dir: str = "",
+    resume: bool = True,
+) -> dict:
+    """
+    Score every (sample × criterion) pair in responses.jsonl with EvalAgent.
+
+    Args:
+        responses_jsonl: Path to responses.jsonl on the volume (relative to
+                         STORAGE_PATH, or absolute).
+        output_dir:      Where to write scored_responses.jsonl. Defaults to the
+                         same directory as responses_jsonl.
+        resume:          Skip prompt_ids already present in scored_responses.jsonl.
+
+    Returns:
+        Dict with counts: scored, skipped, errors, api_calls, output_file.
+    """
+    import os
+    import sys
+    import json
+    from pathlib import Path
+    from statistics import mean, stdev
+
+    repo    = REMOTE_REPO_PATH
+    storage = os.environ["STORAGE_PATH"]
+    os.chdir(repo)
+    sys.path.insert(0, repo)
+
+    # evaluate_benchmark.py uses bare `from prompt import ...` / `from evaluator import ...`
+    wb_dir = f"{repo}/evaluation/writing_bench"
+    sys.path.insert(0, wb_dir)
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY is empty. Add 'anthropic' to tokens.json and re-run; "
+            "modal_run.py will inject it via the runtime secret."
+        )
+
+    # Resolve paths against the persistent volume
+    if not os.path.isabs(responses_jsonl):
+        responses_jsonl = f"{storage}/{responses_jsonl}"
+    if not output_dir:
+        output_dir = str(Path(responses_jsonl).parent)
+    elif not os.path.isabs(output_dir):
+        output_dir = f"{storage}/{output_dir}"
+    os.makedirs(output_dir, exist_ok=True)
+
+    output_file = os.path.join(output_dir, "scored_responses.jsonl")
+
+    print(f"{'='*70}")
+    print(f"  WritingBench Scoring via EvalAgent (Claude judge)")
+    print(f"{'='*70}")
+    print(f"  Input:   {responses_jsonl}")
+    print(f"  Output:  {output_file}")
+    print(f"  Resume:  {resume}\n")
+
+    # Imports that need wb_dir on sys.path
+    from evaluator import ClaudeAgent
+    from batch_eval_agent import BatchEvalAgent
+    from batch_eval_prompt import batch_evaluate_system
+
+    agent = BatchEvalAgent(ClaudeAgent(system_prompt=batch_evaluate_system))
+
+    # Resume: collect already-scored prompt_ids
+    already_done: set = set()
+    if resume and os.path.exists(output_file):
+        with open(output_file) as f:
+            for line in f:
+                try:
+                    already_done.add(json.loads(line)["prompt_id"])
+                except (json.JSONDecodeError, KeyError):
+                    pass
+        if already_done:
+            print(f"Resume: {len(already_done)} prompt(s) already scored, skipping.\n")
+
+    # Load all entries from responses.jsonl
+    with open(responses_jsonl) as f:
+        entries = [json.loads(line) for line in f if line.strip()]
+
+    total_prompts   = len(entries)
+    scored_count    = 0
+    skipped_count   = 0
+    error_count     = 0
+    total_api_calls = 0
+
+    with open(output_file, "a") as out_f:
+        for entry_idx, entry in enumerate(entries):
+            prompt_id    = entry["prompt_id"]
+            query        = entry["query"]
+            criteria     = entry["criteria"]
+            samples      = entry.get("samples", [])
+            format_score = entry.get("format_score", 1)
+
+            if resume and prompt_id in already_done:
+                skipped_count += 1
+                continue
+
+            print(
+                f"[{entry_idx + 1}/{total_prompts}] {prompt_id}  "
+                f"{entry.get('domain_name', '')} / {entry.get('subdomain', '')}  "
+                f"({len(samples)} samples, {len(criteria)} criteria, "
+                f"{len(samples)} API calls)"
+            )
+
+            # Invalid format: record zero reward and move on
+            if format_score == -1 or not samples:
+                entry["reward_score"] = {"overall": 0.0, "format": -1.0, "accuracy": 0.0}
+                out_f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                out_f.flush()
+                skipped_count += 1
+                continue
+
+            sample_avg_scores = []
+            for sample in samples:
+                sample_id = sample["sample_id"]
+                try:
+                    # One API call scores all criteria at once
+                    criterion_scores = agent.score_all_criteria(
+                        content={"response": sample["text"]},
+                        query=query,
+                        criteria=criteria,
+                    )
+                    total_api_calls += 1
+                except Exception as e:
+                    print(f"  ✗ [{prompt_id}] sample {sample_id}: {e}")
+                    criterion_scores = {
+                        c["name"]: {"score": 0, "reason": f"scoring failed: {e}"}
+                        for c in criteria
+                    }
+                    error_count += 1
+
+                valid_scores = [v["score"] for v in criterion_scores.values() if v.get("score", 0) > 0]
+                avg = mean(valid_scores) if valid_scores else 0.0
+
+                sample["scores"]        = criterion_scores
+                sample["average_score"] = avg
+                sample_avg_scores.append(avg)
+
+            # Aggregate statistics and update reward_score
+            if sample_avg_scores:
+                entry["statistics"] = {
+                    "mean": mean(sample_avg_scores),
+                    "std":  stdev(sample_avg_scores) if len(sample_avg_scores) > 1 else 0.0,
+                    "min":  min(sample_avg_scores),
+                    "max":  max(sample_avg_scores),
+                    "per_sample": sample_avg_scores,
+                }
+                # accuracy: mean sample score normalised to [0, 1] (scores are 1-10)
+                accuracy = (mean(sample_avg_scores) - 1) / 9.0
+                entry["reward_score"] = {
+                    "overall":  0.0,   # R-Zero formula applied downstream
+                    "format":   1.0,
+                    "accuracy": round(accuracy, 4),
+                }
+
+            out_f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            out_f.flush()
+            scored_count += 1
+
+    print(f"\n{'='*70}")
+    print(f"  Scoring Complete")
+    print(f"{'='*70}")
+    print(f"  Scored:     {scored_count}")
+    print(f"  Skipped:    {skipped_count}")
+    print(f"  Errors:     {error_count}")
+    print(f"  API calls:  {total_api_calls}")
+    print(f"  Output:     {output_file}")
+
+    return {
+        "status":      "success",
+        "scored":      scored_count,
+        "skipped":     skipped_count,
+        "errors":      error_count,
+        "api_calls":   total_api_calls,
+        "output_file": output_file,
+    }
+
+
+@app.local_entrypoint()
+def score(
+    responses_jsonl: str = "evaluation/writing_bench/solver_sampling_outputs/modal_run/responses.jsonl",
+    output_dir: str = "",
+    resume: bool = True,
+):
+    """
+    Local entrypoint: score responses.jsonl with EvalAgent (Claude judge).
+
+        modal run --detach modal_run.py::score \\
+            --responses-jsonl evaluation/writing_bench/solver_sampling_outputs/modal_run/responses.jsonl
+
+    Pass --no-resume to force re-scoring from scratch even if a partial
+    scored_responses.jsonl already exists.
+    """
+    result = score_responses.remote(
+        responses_jsonl=responses_jsonl,
+        output_dir=output_dir,
+        resume=resume,
+    )
+    print(f"\n=== Scoring Complete ===")
+    print(json.dumps(result, indent=2))

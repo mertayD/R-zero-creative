@@ -1,0 +1,359 @@
+{
+  "batch_id": "one_shot_batch_42_1778807188",
+  "domains_sampled": [
+    "D6",
+    "D2",
+    "D1"
+  ],
+  "subdomains_sampled": [
+    "Product Description",
+    "Promotional Copy",
+    "Strategic Plan",
+    "Email Marketing",
+    "Limitations"
+  ],
+  "generation_log": {
+    "total_attempted": 5,
+    "total_generated": 5,
+    "skipped": 0,
+    "json_parse_failures": 0,
+    "network_failures": 0,
+    "format_validation_failures": 0
+  },
+  "prompts": [
+    {
+      "prompt_id": "prompt_0001",
+      "domain": "D6",
+      "domain_name": "Advertising & Marketing",
+      "subdomain": "Product Description",
+      "query": "Craft a compelling and detailed product description for a high-end skincare line that emphasizes its unique ingredients, benefits, and the luxurious experience it provides. The description should be written in a formal, yet approachable tone, suitable for a high-end beauty website. It should include information on the key ingredients, their benefits, and how they work together to improve skin health. Additionally, highlight the packaging design, ensuring it reflects the product's premium nature. The description should end with a strong call to action, encouraging readers to purchase and try the product.",
+      "criteria": [
+        {
+          "name": "Specificity and Detail",
+          "criteria_description": "Evaluates how specific and detailed the description is, reflecting the depth of knowledge and expertise in the subject matter. This includes the thoroughness of the ingredient information, the clarity of the product benefits, and the vividness of the packaging description.",
+          "1-2": "Lack of specificity and detail; generic and vague description with no clear emphasis on key features or benefits.",
+          "3-4": "Some specificity and detail, but lacks depth in certain areas, leaving room for confusion or missing key information.",
+          "5-6": "Adequate specificity and detail, but some areas could be more thorough or precise.",
+          "7-8": "Strong specificity and detail, with a clear and well-rounded presentation of the product's features and benefits.",
+          "9-10": "Exceptional specificity and detail, offering an in-depth and vivid description that leaves no room for ambiguity and impresses with its comprehensiveness."
+        },
+        {
+          "name": "Tone and Voice",
+          "criteria_description": "Assesses the appropriateness and effectiveness of the tone and voice used in the description. It includes how well the tone conveys the product's premium nature, and whether the language is engaging and suitable for the target audience.",
+          "1-2": "Inappropriate or inconsistent tone; tone does not match the product's premium nature or target audience.",
+          "3-4": "Somewhat appropriate tone, but lacks consistency or fails to fully engage the audience.",
+          "5-6": "Generally appropriate tone, but may lack the sophistication or engagement needed for a high-end product.",
+          "7-8": "Strong tone that effectively conveys the product's premium nature and engages the target audience.",
+          "9-10": "Exceptional tone that perfectly matches the product's premium nature and captivates the audience with its sophisticated and engaging language."
+        },
+        {
+          "name": "Call to Action",
+          "criteria_description": "Evaluates the strength and effectiveness of the call to action at the end of the description. It considers whether the action encourages the audience to take the desired step and is compelling enough to drive conversions.",
+          "1-2": "Weak or missing call to action; does not effectively motivate the audience to take action.",
+          "3-4": "Somewhat effective call to action, but may lack urgency or clear instructions.",
+          "5-6": "Adequate call to action, but could be more compelling or specific in guiding the reader.",
+          "7-8": "Strong call to action that effectively encourages the reader to take the next step.",
+          "9-10": "Exceptional call to action that is highly compelling, specific, and drives strong engagement and conversions."
+        },
+        {
+          "name": "Clarity and Coherence",
+          "criteria_description": "Assesses the clarity and flow of the description, ensuring it is easy to follow and understand. This includes the logical structure of the information, the smooth transition between ideas, and the absence of confusing or ambiguous statements.",
+          "1-2": "Poor clarity and coherence; difficult to follow due to lack of structure, inconsistent ideas, or confusing language.",
+          "3-4": "Some clarity and coherence, but may have occasional sections that are difficult to follow or are not well-organized.",
+          "5-6": "Generally clear and coherent, but some sections could benefit from better organization or smoother transitions.",
+          "7-8": "Strong clarity and coherence, with a well-organized and smooth-flowing description that is easy to follow.",
+          "9-10": "Exceptional clarity and coherence, offering a perfectly structured and flowery description that is easy to follow and understand."
+        },
+        {
+          "name": "Relevance and Focus",
+          "criteria_description": "Evaluates how well the description stays relevant and focused on the key selling points of the product. It considers whether the information provided is directly related to the product's benefits and unique features, and whether there is any irrelevant information that detracts from the main message.",
+          "1-2": "Relevance and focus are lacking; the description may include irrelevant information or strays off-topic.",
+          "3-4": "Some relevance and focus, but may include minor irrelevant details that do not significantly detract from the main message.",
+          "5-6": "Adequate relevance and focus, but could benefit from a more tightly focused presentation of the product's key selling points.",
+          "7-8": "Strong relevance and focus, with the description clearly centered on the product's benefits and unique features.",
+          "9-10": "Exceptional relevance and focus, offering a description that is perfectly aligned with the product's key selling points, leaving no irrelevant information or off-topic distractions."
+        }
+      ],
+      "requirements": {
+        "style": "Formal, yet approachable tone; suitable for a high-end beauty website",
+        "format": "No specific format required, but should be coherent and well-structured",
+        "length": "No specific length required, but should be detailed enough to convey the product's key features and benefits"
+      },
+      "guidance_applied": [],
+      "format_score": 1,
+      "language": "English",
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0002",
+      "domain": "D6",
+      "domain_name": "Advertising & Marketing",
+      "subdomain": "Promotional Copy",
+      "query": "Design a promotional email copy for a new line of eco-friendly kitchen appliances targeting environmentally conscious consumers. The email should include an attention-grabbing subject line, an engaging opening paragraph, a concise yet persuasive description of the product benefits, a clear call to action, and a final compelling reason to purchase. Write in a friendly yet authoritative tone, and ensure the email adheres to standard email marketing formatting, including a readable layout, concise paragraphs, and use of strong, persuasive language. The email should be no longer than 500 words.",
+      "criteria": [
+        {
+          "name": "Relevance",
+          "criteria_description": "Evaluates whether the email effectively targets environmentally conscious consumers and highlights the eco-friendly aspects of the kitchen appliances.",
+          "1-2": "Email is irrelevant to the target audience or fails to emphasize eco-friendly benefits, making it ineffective for its intended purpose.",
+          "3-4": "Email is somewhat relevant but misses key aspects of targeting environmentally conscious consumers or emphasizing eco-friendliness.",
+          "5-6": "Email is somewhat relevant, but significant omissions or weaknesses in targeting the audience or highlighting eco-friendliness detract from its effectiveness.",
+          "7-8": "Email is relevant, effectively targeting environmentally conscious consumers and highlighting eco-friendly aspects, though minor areas of improvement are noted.",
+          "9-10": "Email is highly relevant, perfectly tailored to target environmentally conscious consumers and consistently emphasizes the eco-friendly benefits of the appliances."
+        },
+        {
+          "name": "Engagement",
+          "criteria_description": "Assesses the email's ability to capture and maintain the reader's attention throughout, with a focus on the subject line, opening paragraph, and overall layout.",
+          "1-2": "Email fails to engage readers, with a dull subject line, lackluster opening, and disorganized layout that makes it difficult to read and understand.",
+          "3-4": "Email engages moderately, with a subject line that piques interest, a readable opening, but some sections lack engagement or clarity.",
+          "5-6": "Email is somewhat engaging, with a clear subject line and engaging opening, but could benefit from more compelling content to maintain reader interest.",
+          "7-8": "Email is highly engaging, with a strong subject line, compelling opening paragraph, and a well-structured layout that maintains reader interest throughout.",
+          "9-10": "Email is exceptionally engaging, with a captivating subject line, a memorable opening paragraph, and a layout that seamlessly captures and retains reader attention, leading to strong engagement."
+        },
+        {
+          "name": "Persuasiveness",
+          "criteria_description": "Evaluates the effectiveness of the email in persuading the reader to take the desired action, based on the clarity, strength, and persuasiveness of the product description and call to action.",
+          "1-2": "Email fails to persuade the reader, with a lackluster description of product benefits and an unclear call to action, making it ineffective for driving desired action.",
+          "3-4": "Email is somewhat persuasive, with a brief description of product benefits and a recognizable call to action, but lacks impact in convincing the reader to act.",
+          "5-6": "Email is moderately persuasive, with a clear description of product benefits and a strong call to action, but could benefit from increased persuasiveness to effectively drive action.",
+          "7-8": "Email is highly persuasive, with a compelling description of product benefits and a clear, powerful call to action, effectively motivating the reader to take action.",
+          "9-10": "Email is exceptionally persuasive, with a masterfully crafted description of product benefits and an irresistible call to action, making it highly effective in driving the desired action."
+        },
+        {
+          "name": "Format Adherence",
+          "criteria_description": "Ensures the email strictly adheres to standard email marketing formatting, including readability, structure, and layout.",
+          "1-2": "Email completely disregards standard formatting, making it unreadable and difficult for the reader to follow or understand.",
+          "3-4": "Email mostly adheres to standard formatting but includes noticeable errors or areas of neglect in readability, structure, or layout.",
+          "5-6": "Email somewhat adheres to standard formatting but lacks some key elements or requirements, affecting overall readability and effectiveness.",
+          "7-8": "Email highly adheres to standard formatting, maintaining a clear and organized structure with well-balanced paragraphs and sections.",
+          "9-10": "Email flawlessly adheres to standard formatting, with a perfect blend of readability, structure, and layout that ensures an exceptional user experience."
+        },
+        {
+          "name": "Length",
+          "criteria_description": "Evaluates whether the email meets the specified length requirement, ensuring it is neither too short nor too long.",
+          "1-2": "Email exceeds the length requirement significantly, being overly verbose and potentially overwhelming or distracting to the reader.",
+          "3-4": "Email exceeds the length requirement but not excessively, making it slightly longer than necessary.",
+          "5-6": "Email slightly exceeds or falls short of the length requirement, potentially affecting the overall readability and effectiveness.",
+          "7-8": "Email meets the length requirement adequately, with a reasonable length that allows for the necessary information without being overly burdensome.",
+          "9-10": "Email precisely meets the length requirement, striking the perfect balance between providing sufficient information and avoiding overwhelming the reader."
+        }
+      ],
+      "requirements": {
+        "style": "Friendly yet authoritative tone, targeting environmentally conscious consumers.",
+        "format": "Standard email marketing formatting, including readable layout, concise paragraphs, and use of strong persuasive language.",
+        "length": "No longer than 500 words"
+      },
+      "guidance_applied": [
+        "Include format adherence requirements, such as writing according to a prescribed outline or outputting in a specific format."
+      ],
+      "format_score": 1,
+      "language": "English",
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0003",
+      "domain": "D2",
+      "domain_name": "Finance & Business",
+      "subdomain": "Strategic Plan",
+      "query": "Design a comprehensive strategic plan for a mid-sized pharmaceutical company, focusing on its expansion into emerging markets. The plan should include a detailed market analysis, projected financial forecasts, and a risk management strategy. The strategic plan should adhere to a formal business writing style, be structured with clear sections (Executive Summary, Market Analysis, Financial Projections, Risk Management, Implementation Plan, and Conclusion), and be no less than 3000 words and no more than 4000 words.",
+      "criteria": [
+        {
+          "name": "Specificity",
+          "criteria_description": "Assesses the clarity, detail, and focus of the writing prompt on the specific requirements of the strategic plan. Evaluates whether the prompt clearly outlines the necessary components and scope.",
+          "1-2": "Prompt is vague, lacks clarity on requirements and scope, leading to significant misunderstandings or incomplete plans.",
+          "3-4": "Prompt is somewhat vague but more specific than the lowest level, still missing some critical details but providing a better sense of the task.",
+          "5-6": "Prompt meets basic expectations but could include more detail, potentially leading to slightly incomplete or narrowly focused plans.",
+          "7-8": "Prompt is clear and detailed, providing a solid foundation for a comprehensive strategic plan, though minor adjustments could enhance focus.",
+          "9-10": "Prompt is exceptionally specific, covering all critical aspects with clear expectations and necessary details for a highly focused and comprehensive plan."
+        },
+        {
+          "name": "Relevance",
+          "criteria_description": "Evaluates how well the writing prompt aligns with the needs of the task in the Finance & Business domain, particularly focusing on strategic planning in the pharmaceutical industry.",
+          "1-2": "Prompt is irrelevant to the task or domain, resulting in a plan that misses critical aspects of strategic planning or the pharmaceutical industry.",
+          "3-4": "Prompt has some relevance but is not strongly tied to the task, leading to a plan that may lack important industry-specific insights or strategic depth.",
+          "5-6": "Prompt is somewhat relevant but may miss key aspects, leading to a plan that is adequate but not fully strategic or industry-specific.",
+          "7-8": "Prompt is well-aligned with the task and domain, resulting in a strategic plan that is thoughtful and industry-specific, though minor adjustments could improve.",
+          "9-10": "Prompt is highly relevant and closely tied to the task and domain, resulting in a strategic plan that is deeply insightful, strategic, and highly industry-specific."
+        },
+        {
+          "name": "Coherence and Logical Flow",
+          "criteria_description": "Assesses the logical structure and coherence of the writing prompt, ensuring it guides the creation of a well-organized and coherent strategic plan.",
+          "1-2": "Prompt lacks clear structure, leading to a plan that is disorganized and lacks a logical flow.",
+          "3-4": "Prompt has a somewhat clear structure but significant gaps or inconsistencies, resulting in a plan that is occasionally hard to follow.",
+          "5-6": "Prompt provides a basic structure, leading to a plan that is generally organized but may have areas that lack clarity.",
+          "7-8": "Prompt has a clear and consistent structure, resulting in a plan that is well-organized and easy to follow, though minor adjustments could enhance coherence.",
+          "9-10": "Prompt is exceptionally clear and structurally sound, guiding the creation of a strategic plan that is highly organized, logical, and easy to follow."
+        },
+        {
+          "name": "Depth and Specificity",
+          "criteria_description": "Evaluates the depth and specificity of the writing prompt, assessing whether it requires a detailed and thorough analysis.",
+          "1-2": "Prompt is superficial, requiring only minimal analysis, leading to a plan that is shallow and lacking in depth.",
+          "3-4": "Prompt is somewhat specific but lacks depth, resulting in a plan that is adequately detailed but not comprehensive.",
+          "5-6": "Prompt meets basic depth requirements but could be more specific, leading to a plan that is detailed but may miss some critical aspects.",
+          "7-8": "Prompt is clear and specific, resulting in a plan that is detailed and thorough, though minor enhancements could improve depth.",
+          "9-10": "Prompt is highly specific and requires a detailed and thorough analysis, resulting in a plan that is comprehensive, insightful, and deeply detailed."
+        },
+        {
+          "name": "Adherence to Requirements",
+          "criteria_description": "Assesses whether the writing prompt accurately and completely specifies the requirements of the strategic plan, ensuring the output meets all necessary criteria.",
+          "1-2": "Prompt misses critical requirements, resulting in a plan that is incomplete or off-task.",
+          "3-4": "Prompt has some omissions or ambiguities, leading to a plan that may not fully meet the required criteria.",
+          "5-6": "Prompt meets basic requirements but could be clearer about some aspects, resulting in a plan that is adequate but potentially incomplete.",
+          "7-8": "Prompt is well-defined, resulting in a plan that meets all requirements with minor adjustments possibly needed.",
+          "9-10": "Prompt is exceptionally clear and complete, resulting in a strategic plan that fully and accurately meets all specified requirements."
+        }
+      ],
+      "requirements": {
+        "style": "formal",
+        "format": {
+          "sections": [
+            "Executive Summary",
+            "Market Analysis",
+            "Financial Projections",
+            "Risk Management",
+            "Implementation Plan",
+            "Conclusion"
+          ],
+          "word_count": "3000-4000"
+        },
+        "length": "3000-4000"
+      },
+      "guidance_applied": [],
+      "format_score": 1,
+      "language": "English",
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0004",
+      "domain": "D6",
+      "domain_name": "Advertising & Marketing",
+      "subdomain": "Email Marketing",
+      "query": "Design a persuasive email marketing campaign for a new line of organic skincare products aimed at busy professionals aged 25-40. The email should include a product introduction, benefits, a limited-time discount offer, and a clear call to action. Ensure the tone is professional yet inviting, and the content is concise and engaging, suitable for a medium length email.",
+      "criteria": [
+        {
+          "name": "Relevance to the Writing Task",
+          "criteria_description": "Assesses how closely the content adheres to the specified subdomain and purpose, including accuracy in addressing the email marketing context and requirements.",
+          "1-2": "Highly irrelevant, fails to address key requirements, potentially misleading.",
+          "3-4": "Partially relevant, misses some critical aspects, but may be useful with significant editing.",
+          "5-6": "Moderately relevant, addresses primary requirements but lacks depth in certain areas.",
+          "7-8": "Well relevant, meets most requirements, provides a solid foundation for email content.",
+          "9-10": "Highly relevant, fully addresses all requirements, offers a complete and effective solution."
+        },
+        {
+          "name": "Coherence and Logical Flow",
+          "criteria_description": "Evaluates the clarity and consistency of ideas, ensuring they flow logically and provide a smooth reading experience.",
+          "1-2": "Poor coherence, ideas are disjointed, makes understanding the content difficult.",
+          "3-4": "Coherent but has gaps, logical flow is somewhat compromised.",
+          "5-6": "Fairly coherent, maintains a logical flow but could benefit from tighter organization.",
+          "7-8": "Good coherence, ideas are presented clearly with a logical progression.",
+          "9-10": "Excellent coherence, flows seamlessly with clear and well-connected ideas."
+        },
+        {
+          "name": "Depth and Specificity",
+          "criteria_description": "Measures the detail and specificity of the content, including whether it provides unique insights or deep information relevant to the audience.",
+          "1-2": "Shallow, lacks detail, offers little new or valuable information.",
+          "3-4": "Somewhat specific but lacks depth, some detail is present but not fully developed.",
+          "5-6": "Moderately specific, contains adequate detail but could be more informative.",
+          "7-8": "Well-specific, detailed content with clear value, demonstrates understanding of the target audience.",
+          "9-10": "Exceptionally specific, deeply detailed and insightful, provides unique value to the reader."
+        },
+        {
+          "name": "Adherence to Requirements",
+          "criteria_description": "Checks if the content strictly follows the specified style, format, and length requirements.",
+          "1-2": "Significantly fails to meet requirements, content is far from the desired format or length.",
+          "3-4": "Partially adheres, misses some requirements but mostly follows the guidelines.",
+          "5-6": "Generally adheres, meets most requirements but could be better in some areas.",
+          "7-8": "Very well adheres, mostly meets all requirements with minor adjustments.",
+          "9-10": "Perfectly adheres, fully complies with every requirement, offering an ideal solution."
+        },
+        {
+          "name": "Overall Quality and Effectiveness",
+          "criteria_description": "Judges the overall impact and effectiveness of the content, including its ability to engage the audience and achieve the intended purpose.",
+          "1-2": "Low quality, ineffective, does not engage or persuade the intended audience.",
+          "3-4": "Below average quality, provides minimal engagement and impact.",
+          "5-6": "Average quality, satisfactory but not outstanding, could improve engagement.",
+          "7-8": "High quality, effective, successfully engages and persuades the audience.",
+          "9-10": "Outstanding quality, exceptionally engaging and persuasive, achieves its purpose effectively."
+        }
+      ],
+      "requirements": {
+        "style": "Professional yet inviting, suitable for a medium length email.",
+        "format": "Includes product introduction, benefits, limited-time discount offer, and clear call to action.",
+        "length": "Concise and engaging, suitable for a medium length email."
+      },
+      "guidance_applied": [
+        "Add a requirement for generating specific lengths.",
+        "Include more specific content requirements, like details about a particular event or focusing on specific content.",
+        "Incorporate user personalization needs, such as considering the user's identity or integrating personal experiences.",
+        "Express concisely in one sentence."
+      ],
+      "format_score": 1,
+      "language": "English",
+      "seed": 42
+    },
+    {
+      "prompt_id": "prompt_0005",
+      "domain": "D1",
+      "domain_name": "Academic & Engineering",
+      "subdomain": "Limitations",
+      "query": "Compose a formal report that analyzes the limitations of an experimental test conducted to evaluate the durability of a novel material subjected to extreme temperature variations. The report should follow a structured format including an executive summary, a detailed analysis of the limitations, and supporting empirical data. The analysis should incorporate a systematic evaluation of potential material degradation, variations in experimental conditions, and unexpected outcomes. Use a formal, academic tone, adhering to appropriate conventions for the field.",
+      "criteria": [
+        {
+          "name": "Specificity of Task Description",
+          "criteria_description": "Assesses how specific and detailed the prompt is in describing the writing task.",
+          "1-2": "The prompt lacks specificity, either not asking for a clear task or providing vague guidance that makes it difficult to interpret.",
+          "3-4": "The prompt lacks clarity and detail, leaving some aspects of the writing task ambiguous or insufficiently defined.",
+          "5-6": "The prompt is somewhat specific but still leaves room for ambiguity, providing basic instructions without detail.",
+          "7-8": "The prompt is specific and somewhat detailed, providing enough clarity but still lacking in depth or specificity.",
+          "9-10": "The prompt is highly specific and extremely detailed, clearly outlining every aspect of the writing task without any ambiguity or vagueness."
+        },
+        {
+          "name": "Depth of Content Expectations",
+          "criteria_description": "Evaluates the level of detail and depth expected in the output response.",
+          "1-2": "The prompt demands insufficient depth, lacking in detail or context, and making it difficult to produce a comprehensive response.",
+          "3-4": "The prompt is somewhat shallow, with basic expectations but not providing enough detail or depth to require detailed exploration or analysis.",
+          "5-6": "The prompt offers a moderate level of depth, focusing on the core content but failing to elaborate or expand on specific aspects.",
+          "7-8": "The prompt is well-defined in depth, expecting a thorough analysis that covers multiple aspects of the writing task in reasonable detail.",
+          "9-10": "The prompt requires a deep, comprehensive exploration of the writing task, with detailed expectations across various aspects and levels of analysis."
+        },
+        {
+          "name": "Adherence to Format and Structure",
+          "criteria_description": "Assesses whether the prompt specifies any particular format, structure, or adherence requirements for the output.",
+          "1-2": "The prompt does not include any format, structure, or adherence requirements, making it difficult to interpret what constitutes a valid response.",
+          "3-4": "The prompt mentions format or structure requirements but inadequately describes them or fails to include key elements.",
+          "5-6": "The prompt specifies a format or structure but fails to provide enough detail for effective adherence or incorporation.",
+          "7-8": "The prompt provides clear format and structure requirements, but lacks detailed guidance on some aspects.",
+          "9-10": "The prompt includes detailed, well-defined format and structure requirements that are easy to understand and effectively incorporate into the output."
+        },
+        {
+          "name": "Overall Clarity and Coherence",
+          "criteria_description": "Evaluates the overall clarity and coherence of the prompt, assessing whether it is easy to understand and execute.",
+          "1-2": "The prompt is unclear and incoherent, making it difficult to interpret or effectively carry out the writing task.",
+          "3-4": "The prompt has some clarity but is not completely coherent, leaving room for misunderstandings or incomplete execution.",
+          "5-6": "The prompt is somewhat clear but lacks overall coherence, making it slightly challenging to follow or complete.",
+          "7-8": "The prompt is clear and somewhat coherent, providing a good understanding but not making the writing task entirely clear.",
+          "9-10": "The prompt is highly clear and coherent, making it easy to understand and effectively execute the writing task."
+        },
+        {
+          "name": "Accuracy and Precision of Requirements",
+          "criteria_description": "Assesses the accuracy and precision of the requirements outlined in the prompt, including their specificity and relevance to the writing task.",
+          "1-2": "The requirements in the prompt are inaccurate, imprecise, or irrelevant, significantly impacting the clarity and effectiveness of the output.",
+          "3-4": "The requirements are somewhat accurate but not precise, lacking detail or specificity, and may not adequately guide the output.",
+          "5-6": "The requirements are roughly accurate but imprecise or incomplete, providing only basic guidance that may not fully cover the writing task.",
+          "7-8": "The requirements are clear and somewhat accurate, offering basic guidance but with missing or incomplete details.",
+          "9-10": "The requirements are highly accurate, precise, and complete, providing comprehensive guidance that effectively specifies the writing task."
+        }
+      ],
+      "requirements": {
+        "style": "Formal academic style, adhering to discipline-specific conventions",
+        "format": "Structured with an executive summary, detailed analysis of limitations, and supporting data",
+        "length": "1000-1500 words"
+      },
+      "guidance_applied": [
+        "Include format adherence requirements, such as writing according to a prescribed outline or outputting in a specific format."
+      ],
+      "format_score": 1,
+      "language": "English",
+      "seed": 42
+    }
+  ]
+}
