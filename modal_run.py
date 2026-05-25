@@ -1248,6 +1248,7 @@ def score_responses(
     from evaluator import ClaudeAgent
     from batch_eval_agent import BatchEvalAgent
     from batch_eval_prompt import batch_evaluate_system
+    from evaluation.shared.rewards import compute_writing_reward
 
     agent = BatchEvalAgent(ClaudeAgent(system_prompt=batch_evaluate_system))
 
@@ -1292,11 +1293,15 @@ def score_responses(
                 f"{len(samples)} API calls)"
             )
 
-            # Invalid format: record zero reward and move on
-            if format_score == -1 or not samples:
-                entry["reward_score"] = {"overall": 0.0, "format": -1.0, "accuracy": 0.0}
+            # Invalid format: record zero reward for bookkeeping, but skip training signal
+            if format_score == -1:
+                entry["reward_score"] = {"overall": 0.0, "format": 0.0, "accuracy": 0.0}
                 out_f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 out_f.flush()
+                skipped_count += 1
+                continue
+            # No samples generated: nothing to score, skip entirely
+            if not samples:
                 skipped_count += 1
                 continue
 
@@ -1335,13 +1340,10 @@ def score_responses(
                     "max":  max(sample_avg_scores),
                     "per_sample": sample_avg_scores,
                 }
-                # accuracy: mean sample score normalised to [0, 1] (scores are 1-10)
-                accuracy = (mean(sample_avg_scores) - 1) / 9.0
-                entry["reward_score"] = {
-                    "overall":  0.0,   # R-Zero formula applied downstream
-                    "format":   1.0,
-                    "accuracy": round(accuracy, 4),
-                }
+                entry["reward_score"] = compute_writing_reward(
+                    avg_score=mean(sample_avg_scores),
+                    format_valid=True,
+                )
 
             out_f.write(json.dumps(entry, ensure_ascii=False) + "\n")
             out_f.flush()
@@ -1388,3 +1390,141 @@ def score(
     )
     print(f"\n=== Scoring Complete ===")
     print(json.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Creative Challenger Training
+# ---------------------------------------------------------------------------
+@app.function(
+    gpu=MODAL_FULL_GPU,
+    image=image,
+    volumes={REMOTE_STORAGE_PATH: volume},
+    secrets=[runtime_secret],
+    timeout=MODAL_TIMEOUT,
+    env={
+        "VLLM_DISABLE_COMPILE_CACHE":      "1",
+        "TORCHINDUCTOR_MAX_AUTOTUNE":       "0",
+        "TOKENIZERS_PARALLELISM":           "true",
+        "NCCL_DEBUG":                       "WARN",
+        "VLLM_LOGGING_LEVEL":              "WARN",
+        "TORCH_NCCL_AVOID_RECORD_STREAMS":  "1",
+        "PYTORCH_CUDA_ALLOC_CONF":          "expandable_segments:False",
+        "PYTHONUNBUFFERED":                 "1",
+        "NO_PROXY":                         "127.0.0.1,localhost,0.0.0.0",
+        "no_proxy":                         "127.0.0.1,localhost,0.0.0.0",
+    },
+)
+def train_creative_challenger(
+    solver_model: str = "Qwen/Qwen3-4B-Base",
+    challenger_model: str = "Qwen/Qwen3-4B-Base",
+    abbr: str = "qwen3-4b-creative-smoke",
+    num_train: int = 8,
+    num_val: int = 2,
+    seed: int = 42,
+    smoke_challenger_max_steps: int = 4,
+):
+    """
+    Train the creative writing challenger with VERL GRPO.
+
+    Starts a vLLM solver server (GPU 7) for live reward computation,
+    then trains the challenger model (GPUs 0-3) using R-Zero uncertainty
+    rewards from the BatchEvalAgent Claude judge.
+
+    Training data comes from DomainSampler (creative_writing_prompts.py),
+    not from pre-scored responses — the challenger learns to generate hard
+    prompts directly from domain/subdomain pairs.
+
+    Args:
+        solver_model:             HF id or volume path — vLLM server for reward computation.
+        challenger_model:         HF id or volume path — model trained by VERL.
+        abbr:                     Short name for checkpoint directories.
+        num_train:                Number of training rows (domain/subdomain pairs).
+        num_val:                  Number of validation rows.
+        seed:                     Random seed for DomainSampler.
+        smoke_challenger_max_steps: Max VERL training steps.
+    """
+    import os
+    import subprocess
+    import sys
+
+    repo    = REMOTE_REPO_PATH
+    storage = os.environ["STORAGE_PATH"]
+
+    os.chdir(repo)
+    sys.path.insert(0, repo)
+
+    hf_cache = f"{storage}/hf_cache"
+    os.makedirs(hf_cache, exist_ok=True)
+    os.environ["HF_HOME"]               = hf_cache
+    os.environ["HUGGINGFACE_HUB_CACHE"] = hf_cache
+
+    env = {
+        **os.environ,
+        "STORAGE_PATH":               storage,
+        "HF_HOME":                    hf_cache,
+        "HUGGINGFACE_HUB_CACHE":      hf_cache,
+        "SMOKE_CHALLENGER_MAX_STEPS": str(smoke_challenger_max_steps),
+        "REMOTE_REPO_PATH":           repo,
+    }
+
+    print(
+        f"=== Creative Challenger Training | "
+        f"solver={solver_model} challenger={challenger_model} abbr={abbr} "
+        f"num_train={num_train} num_val={num_val} steps={smoke_challenger_max_steps} ==="
+    )
+
+    subprocess.run(
+        [
+            "bash", "scripts/creative_challenger_smoke.sh",
+            solver_model, challenger_model, abbr,
+            str(num_train), str(num_val), str(seed),
+        ],
+        env=env,
+        cwd=repo,
+        check=True,
+    )
+
+    volume.commit()
+    print("=== Creative challenger training complete — artefacts committed to volume ===")
+
+
+@app.local_entrypoint()
+def creative_smoke(
+    solver_model: str = "Qwen/Qwen3-4B-Base",
+    challenger_model: str = "Qwen/Qwen3-4B-Base",
+    abbr: str = "qwen3-4b-creative-smoke",
+    num_train: int = 8,
+    num_val: int = 2,
+    seed: int = 42,
+    smoke_challenger_max_steps: int = 4,
+):
+    """
+    Creative writing challenger smoke test: train challenger with VERL GRPO.
+
+    Training data is sampled from DomainSampler (domain/subdomain pairs →
+    full one-shot prompts). Reward is computed live during training:
+    challenger generates a prompt → solver (vLLM, GPU 7) answers →
+    BatchEvalAgent (Claude) scores → R-Zero uncertainty reward.
+
+    To validate the generation/sampling/scoring pipeline separately, use:
+        modal run modal_run.py::generate_one_shot
+        modal run modal_run.py::sample
+        modal run modal_run.py::score
+
+    CLI:
+        modal run --detach modal_run.py::creative_smoke
+        modal run --detach modal_run.py::creative_smoke \\
+            --solver-model Qwen/Qwen3-4B-Base \\
+            --challenger-model Qwen/Qwen3-4B-Base \\
+            --num-train 4 --smoke-challenger-max-steps 2
+    """
+    train_creative_challenger.remote(
+        solver_model=solver_model,
+        challenger_model=challenger_model,
+        abbr=abbr,
+        num_train=num_train,
+        num_val=num_val,
+        seed=seed,
+        smoke_challenger_max_steps=smoke_challenger_max_steps,
+    )
+    print("\n=== Creative Smoke Test Complete ===")

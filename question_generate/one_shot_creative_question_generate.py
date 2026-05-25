@@ -120,6 +120,20 @@ class FormatValidator:
             logger.warning(f"Invalid JSON in output block: {extracted[:200]}")
             return -1, None
 
+        # Ensure the top-level value is a dict with a string query field.
+        # The model can occasionally emit `"query": {...}` instead of a plain
+        # string, which would cause callers to crash on .strip().
+        if not isinstance(parsed, dict):
+            logger.warning(f"Parsed JSON is not a dict: {type(parsed)}")
+            return -1, None
+        query_val = parsed.get("query")
+        if query_val is not None and not isinstance(query_val, str):
+            logger.warning(
+                f"'query' field is {type(query_val).__name__}, expected str; "
+                f"value preview: {str(query_val)[:120]}"
+            )
+            return -1, None
+
         return 1, parsed
 
 
@@ -175,7 +189,7 @@ class WritingPrompt:
         )
 
         return cls(
-            prompt_id=data["prompt_id"],
+            prompt_id=data.get("prompt_id", ""),
             domain=data.get("domain", ""),
             domain_name=data.get("domain_name", ""),
             subdomain=data.get("subdomain", ""),

@@ -15,6 +15,8 @@ from typing import List, Dict, Any, Optional, TypedDict
 import json
 from statistics import mean, stdev
 
+from .rewards import compute_writing_reward
+
 
 class RewardScore(TypedDict):
     """Reward score structure (matches verl/workers/reward/function.py)"""
@@ -194,35 +196,14 @@ class WritingPromptResponse:
         Returns:
             RewardScore with overall, format, accuracy components.
         """
-        # FORMAT CHECK: Immediate penalty if question failed format validation
-        if self.format_score == -1:
-            reward_score: RewardScore = {
-                "overall": 0.0,  # No reward for invalid format
-                "format": -1.0,  # Invalid format indicator
-                "accuracy": 0.0,  # No processing occurred
-            }
-            self.reward_score = reward_score
-            return reward_score
-
-        # Format is valid, compute uncertainty reward
         if not self.statistics:
             self.compute_statistics()
 
         aggregate_score = self.compute_aggregate_score()
-
-        # Normalize to [0, 1]
-        normalized = aggregate_score / 10.0
-
-        # Apply R-Zero uncertainty formula
-        overall_reward = 1.0 - 2.0 * abs(normalized - 0.5)
-
-        # Create RewardScore (matches verl/workers/reward/function.py structure)
-        reward_score: RewardScore = {
-            "overall": overall_reward,  # R-Zero uncertainty reward
-            "format": 1.0,  # Valid format
-            "accuracy": normalized,  # Mean score normalized to [0,1]
-        }
-
+        reward_score: RewardScore = compute_writing_reward(
+            avg_score=aggregate_score,
+            format_valid=(self.format_score != -1),
+        )
         self.reward_score = reward_score
         return reward_score
 
