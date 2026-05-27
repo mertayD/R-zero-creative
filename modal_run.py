@@ -1528,3 +1528,175 @@ def creative_smoke(
         smoke_challenger_max_steps=smoke_challenger_max_steps,
     )
     print("\n=== Creative Smoke Test Complete ===")
+
+
+# ---------------------------------------------------------------------------
+# Creative Solver Training
+# ---------------------------------------------------------------------------
+@app.function(
+    gpu=MODAL_FULL_GPU,
+    image=image,
+    volumes={REMOTE_STORAGE_PATH: volume},
+    secrets=[runtime_secret],
+    timeout=MODAL_TIMEOUT,
+    env={
+        "VLLM_DISABLE_COMPILE_CACHE":      "1",
+        "TORCHINDUCTOR_MAX_AUTOTUNE":       "0",
+        "TOKENIZERS_PARALLELISM":           "true",
+        "NCCL_DEBUG":                       "WARN",
+        "VLLM_LOGGING_LEVEL":              "WARN",
+        "TORCH_NCCL_AVOID_RECORD_STREAMS":  "1",
+        "PYTORCH_CUDA_ALLOC_CONF":          "expandable_segments:False",
+        "PYTHONUNBUFFERED":                 "1",
+        "NO_PROXY":                         "127.0.0.1,localhost,0.0.0.0",
+        "no_proxy":                         "127.0.0.1,localhost,0.0.0.0",
+    },
+)
+def train_creative_solver(
+    solver_model: str = "Qwen/Qwen3-4B-Base",
+    challenger_checkpoint: str = "",
+    abbr: str = "qwen3-4b-creative-smoke",
+    num_train: int = 8,
+    num_val: int = 2,
+    seed: int = 42,
+    smoke_solver_max_steps: int = 4,
+    smoke_solver_rollout_n: int = 4,
+):
+    """
+    Train the creative writing solver with VERL GRPO + Pairwise Rank Reward.
+
+    Pipeline (creative_solver_smoke.sh):
+      Step 0: Load challenger checkpoint (GPU 7), generate writing prompts via
+              one_shot_creative_question_generate.py, then release GPU 7.
+      Step 1: Build train/val parquet — problem=query, answer=WritingPrompt JSON.
+              Rows with missing query or criteria are skipped at build time.
+      Step 2: Train solver (GPUs 0-3) with VERL GRPO.  For each prompt, solver
+              generates rollout_n independent responses; BatchEvalAgent scores
+              each; normalised rank reward R_i = (G - rank_i) / (G - 1) is
+              returned.  Mean reward ≈ 0.5 → GRPO advantages always zero-centred.
+      Step 3: Merge checkpoint.
+
+    Args:
+        solver_model:             HF id or volume path — model being trained.
+        challenger_checkpoint:    Merged challenger checkpoint path on the volume
+                                  (e.g. /storage/models/…_challenger_v1/
+                                  global_step_3/actor/huggingface).
+        abbr:                     Short name for checkpoint directories.
+        num_train:                Number of training rows.
+        num_val:                  Number of validation rows.
+        seed:                     Random seed for prompt generation.
+        smoke_solver_max_steps:   Max VERL training steps.
+        smoke_solver_rollout_n:   G — solver samples per prompt (worker.rollout.n).
+    """
+    import os
+    import subprocess
+    import sys
+
+    repo    = REMOTE_REPO_PATH
+    storage = os.environ["STORAGE_PATH"]
+
+    if not challenger_checkpoint:
+        raise ValueError(
+            "challenger_checkpoint must be set to the merged challenger ckpt path, "
+            "e.g. /storage/models/qwen3-4b-creative-smoke_challenger_v1/"
+            "global_step_3/actor/huggingface"
+        )
+
+    # Validate the checkpoint exists before burning GPU time.
+    # Skip for plain HuggingFace model IDs (e.g. "Qwen/Qwen3-4B-Base") — those
+    # are downloaded at runtime and have no local config.json yet.
+    if os.path.isabs(challenger_checkpoint):
+        ckpt_config = os.path.join(challenger_checkpoint, "config.json")
+        if not os.path.exists(ckpt_config):
+            raise FileNotFoundError(
+                f"Challenger checkpoint not found at: {challenger_checkpoint}\n"
+                f"Expected a merged HuggingFace model directory containing config.json.\n"
+                f"Run creative_smoke first, or check the path on the volume with:\n"
+                f"  modal volume ls {VOLUME_NAME} models/"
+            )
+        print(f"[OK] Challenger checkpoint found: {challenger_checkpoint}")
+    else:
+        print(f"[OK] Challenger checkpoint is a HuggingFace model ID (downloads at runtime): {challenger_checkpoint}")
+
+    os.chdir(repo)
+    sys.path.insert(0, repo)
+
+    hf_cache = f"{storage}/hf_cache"
+    os.makedirs(hf_cache, exist_ok=True)
+    os.environ["HF_HOME"]               = hf_cache
+    os.environ["HUGGINGFACE_HUB_CACHE"] = hf_cache
+
+    env = {
+        **os.environ,
+        "STORAGE_PATH":              storage,
+        "HF_HOME":                   hf_cache,
+        "HUGGINGFACE_HUB_CACHE":     hf_cache,
+        "SMOKE_SOLVER_MAX_STEPS":    str(smoke_solver_max_steps),
+        "SMOKE_SOLVER_ROLLOUT_N":    str(smoke_solver_rollout_n),
+        "REMOTE_REPO_PATH":          repo,
+    }
+
+    print(
+        f"=== Creative Solver Training | "
+        f"solver={solver_model}  challenger_ckpt={challenger_checkpoint}  "
+        f"abbr={abbr}  num_train={num_train}  num_val={num_val}  "
+        f"steps={smoke_solver_max_steps}  G={smoke_solver_rollout_n} ==="
+    )
+
+    subprocess.run(
+        [
+            "bash", "scripts/creative_solver_smoke.sh",
+            solver_model, challenger_checkpoint, abbr,
+            str(num_train), str(num_val), str(seed),
+        ],
+        env=env,
+        cwd=repo,
+        check=True,
+    )
+
+    volume.commit()
+    print("=== Creative solver training complete — artefacts committed to volume ===")
+
+
+@app.local_entrypoint()
+def solver_smoke(
+    solver_model: str = "Qwen/Qwen3-4B-Base",
+    challenger_checkpoint: str = "",
+    abbr: str = "qwen3-4b-creative-smoke",
+    num_train: int = 8,
+    num_val: int = 2,
+    seed: int = 42,
+    smoke_solver_max_steps: int = 2,
+    smoke_solver_rollout_n: int = 4,
+):
+    """
+    Creative writing solver smoke test: train solver with Pairwise Rank Reward.
+
+    Requires a merged challenger checkpoint produced by creative_smoke (or
+    train_creative_challenger).  Pass its path as --challenger-checkpoint.
+
+    Reward is computed live during training:
+      solver generates G responses per prompt → BatchEvalAgent (Claude) scores
+      each → normalised rank reward R_i = (G - rank_i) / (G - 1).
+
+    CLI:
+        modal run --detach modal_run.py::solver_smoke \\
+            --challenger-checkpoint models/qwen3-4b-creative-smoke_challenger_v1/global_step_2/actor/huggingface
+
+        modal run --detach modal_run.py::solver_smoke \\
+            --solver-model Qwen/Qwen3-4B-Base \\
+            --challenger-checkpoint /storage/models/…/huggingface \\
+            --abbr qwen3-4b-creative-smoke \\
+            --num-train 8 --smoke-solver-max-steps 4 --smoke-solver-rollout-n 4
+    """
+    train_creative_solver.remote(
+        solver_model=solver_model,
+        challenger_checkpoint=challenger_checkpoint,
+        abbr=abbr,
+        num_train=num_train,
+        num_val=num_val,
+        seed=seed,
+        smoke_solver_max_steps=smoke_solver_max_steps,
+        smoke_solver_rollout_n=smoke_solver_rollout_n,
+    )
+    print("\n=== Creative Solver Smoke Test Complete ===")
