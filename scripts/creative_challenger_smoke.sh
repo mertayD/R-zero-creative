@@ -33,7 +33,24 @@ seed="${6:-42}"
 
 C_STEPS="${SMOKE_CHALLENGER_MAX_STEPS:-4}"
 C_MERGE=$((C_STEPS - 1))
-SAVE_NAME="${Model_abbr}_challenger_v1"
+
+# ---------------------------------------------------------------------------
+# Run-unique checkpoint name
+# ---------------------------------------------------------------------------
+# When called standalone, SMOKE_RUN_ID is not set so we generate a timestamp
+# here and append it to SAVE_NAME — repeated calls never overwrite each other.
+#
+# When called from creative_coevolve_smoke.sh, that script exports SMOKE_RUN_ID
+# and has already embedded the timestamp in Model_abbr (via the iter_abbr it
+# passes as $3), so we use SAVE_NAME as-is to stay consistent with the path
+# that creative_coevolve_smoke.sh expects.
+# ---------------------------------------------------------------------------
+if [ -z "${SMOKE_RUN_ID:-}" ]; then
+    _RUN_TS=$(date +%Y%m%d_%H%M%S)
+    SAVE_NAME="${Model_abbr}_challenger_v1_${_RUN_TS}"
+else
+    SAVE_NAME="${Model_abbr}_challenger_v1"
+fi
 
 # Cap rollout/actor batch sizes to num_train so VERL always has enough data
 ROLLOUT_BATCH=$(( num_train < 8 ? num_train : 8 ))

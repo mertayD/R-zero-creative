@@ -41,7 +41,20 @@ seed="${6:-42}"
 S_STEPS="${SMOKE_SOLVER_MAX_STEPS:-4}"
 S_MERGE=$((S_STEPS - 1))
 ROLLOUT_N="${SMOKE_SOLVER_ROLLOUT_N:-4}"
-SAVE_NAME="${Model_abbr}_solver_v1"
+
+# ---------------------------------------------------------------------------
+# Run-unique checkpoint name
+# ---------------------------------------------------------------------------
+# Standalone call: append a fresh timestamp so repeated runs don't collide.
+# Called from creative_coevolve_smoke.sh: SMOKE_RUN_ID is exported and
+# Model_abbr already contains the run timestamp, so no second stamp is added.
+# ---------------------------------------------------------------------------
+if [ -z "${SMOKE_RUN_ID:-}" ]; then
+    _RUN_TS=$(date +%Y%m%d_%H%M%S)
+    SAVE_NAME="${Model_abbr}_solver_v1_${_RUN_TS}"
+else
+    SAVE_NAME="${Model_abbr}_solver_v1"
+fi
 
 # Cap rollout/actor batch sizes to num_train so VERL always has enough data
 ROLLOUT_BATCH=$(( num_train < 8 ? num_train : 8 ))

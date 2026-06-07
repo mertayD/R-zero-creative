@@ -282,7 +282,7 @@ def main(
     smoke_solver_max_steps: int = 4,
     smoke_questions_per_gpu: int = 8,
 ):
-    run_smoke_test.remote(
+    fc = run_smoke_test.spawn(
         base_model=base_model,
         abbr=abbr,
         smoke_max_train_samples=smoke_max_train_samples,
@@ -294,6 +294,7 @@ def main(
         smoke_solver_max_steps=smoke_solver_max_steps,
         smoke_questions_per_gpu=smoke_questions_per_gpu,
     )
+    print(f"=== R-Zero smoke test submitted (function call: {fc.object_id}) ===")
 
 
 # ---------------------------------------------------------------------------
@@ -1518,7 +1519,7 @@ def creative_smoke(
             --challenger-model Qwen/Qwen3-4B-Base \\
             --num-train 4 --smoke-challenger-max-steps 2
     """
-    train_creative_challenger.remote(
+    fc = train_creative_challenger.spawn(
         solver_model=solver_model,
         challenger_model=challenger_model,
         abbr=abbr,
@@ -1527,7 +1528,7 @@ def creative_smoke(
         seed=seed,
         smoke_challenger_max_steps=smoke_challenger_max_steps,
     )
-    print("\n=== Creative Smoke Test Complete ===")
+    print(f"=== Challenger training submitted (function call: {fc.object_id}) ===")
 
 
 # ---------------------------------------------------------------------------
@@ -1689,7 +1690,7 @@ def solver_smoke(
             --abbr qwen3-4b-creative-smoke \\
             --num-train 8 --smoke-solver-max-steps 4 --smoke-solver-rollout-n 4
     """
-    train_creative_solver.remote(
+    fc = train_creative_solver.spawn(
         solver_model=solver_model,
         challenger_checkpoint=challenger_checkpoint,
         abbr=abbr,
@@ -1699,4 +1700,193 @@ def solver_smoke(
         smoke_solver_max_steps=smoke_solver_max_steps,
         smoke_solver_rollout_n=smoke_solver_rollout_n,
     )
-    print("\n=== Creative Solver Smoke Test Complete ===")
+    print(f"=== Solver training submitted (function call: {fc.object_id}) ===")
+
+
+# ---------------------------------------------------------------------------
+# Creative Co-Evolution Training
+# ---------------------------------------------------------------------------
+# Ties creative_challenger_smoke.sh and creative_solver_smoke.sh into a
+# single iterative loop where each model feeds the other:
+#
+#   Iteration i, Phase A — Challenger:
+#     solver(i-1) is the frozen reward oracle; challenger(i-1) is trained
+#     → challenger(i) learns to write harder prompts.
+#
+#   Iteration i, Phase B — Solver:
+#     challenger(i) generates prompts; solver(i-1) is trained on them
+#     → solver(i) learns to answer the harder prompts.
+#
+# Iteration 1 initialises both from base_model.
+# ---------------------------------------------------------------------------
+@app.function(
+    gpu=MODAL_FULL_GPU,
+    image=image,
+    volumes={REMOTE_STORAGE_PATH: volume},
+    secrets=[runtime_secret],
+    timeout=MODAL_TIMEOUT,
+    env={
+        "VLLM_DISABLE_COMPILE_CACHE":      "1",
+        "TORCHINDUCTOR_MAX_AUTOTUNE":       "0",
+        "TOKENIZERS_PARALLELISM":           "true",
+        "NCCL_DEBUG":                       "WARN",
+        "VLLM_LOGGING_LEVEL":               "WARN",
+        "TORCH_NCCL_AVOID_RECORD_STREAMS":  "1",
+        "PYTORCH_CUDA_ALLOC_CONF":          "expandable_segments:False",
+        "PYTHONUNBUFFERED":                 "1",
+        "NO_PROXY":                         "127.0.0.1,localhost,0.0.0.0",
+        "no_proxy":                         "127.0.0.1,localhost,0.0.0.0",
+    },
+)
+def train_creative_coevolve(
+    base_model: str = "Qwen/Qwen3-4B-Base",
+    abbr: str = "qwen3-4b-coevolve-smoke",
+    num_iters: int = 2,
+    num_train: int = 8,
+    num_val: int = 2,
+    seed: int = 42,
+    smoke_challenger_max_steps: int = 4,
+    smoke_solver_max_steps: int = 4,
+    smoke_solver_rollout_n: int = 4,
+):
+    """
+    Co-evolving creative challenger + solver training.
+
+    Runs num_iters rounds of alternating training where each model's latest
+    checkpoint is used by the other:
+
+      Iteration 1:
+        Phase A — challenger trains from base_model using base_model as solver
+        Phase B — solver    trains from base_model using iter1 challenger ckpt
+
+      Iteration 2:
+        Phase A — challenger trains from iter1 challenger ckpt using iter1 solver ckpt
+        Phase B — solver    trains from iter1 solver    ckpt using iter2 challenger ckpt
+
+      … and so on.
+
+    After each phase, creative_coevolve_smoke.sh calls verify_checkpoint() to
+    assert that model_merger.py produced actual weight files (model.safetensors
+    or pytorch_model.bin).  If weights are absent the run aborts with a
+    diagnostic before burning GPU time on the next phase.
+
+    Args:
+        base_model:                 HF id or volume path — start for both models.
+        abbr:                       Short prefix for all checkpoint directories.
+        num_iters:                  Number of co-evolution rounds.
+        num_train:                  Training rows per model per round.
+        num_val:                    Validation rows per round.
+        seed:                       Random seed (shared; prompt diversity comes
+                                    from the evolving challenger weights).
+        smoke_challenger_max_steps: VERL training steps per challenger round.
+        smoke_solver_max_steps:     VERL training steps per solver round.
+        smoke_solver_rollout_n:     G — solver samples per prompt (rank reward).
+    """
+    import os
+    import subprocess
+    import sys
+
+    repo    = REMOTE_REPO_PATH
+    storage = os.environ["STORAGE_PATH"]
+
+    os.chdir(repo)
+    sys.path.insert(0, repo)
+
+    hf_cache = f"{storage}/hf_cache"
+    os.makedirs(hf_cache, exist_ok=True)
+    os.environ["HF_HOME"]               = hf_cache
+    os.environ["HUGGINGFACE_HUB_CACHE"] = hf_cache
+
+    env = {
+        **os.environ,
+        "STORAGE_PATH":               storage,
+        "HF_HOME":                    hf_cache,
+        "HUGGINGFACE_HUB_CACHE":      hf_cache,
+        "SMOKE_CHALLENGER_MAX_STEPS": str(smoke_challenger_max_steps),
+        "SMOKE_SOLVER_MAX_STEPS":     str(smoke_solver_max_steps),
+        "SMOKE_SOLVER_ROLLOUT_N":     str(smoke_solver_rollout_n),
+        "REMOTE_REPO_PATH":           repo,
+    }
+
+    print(
+        f"=== Creative Co-Evolution | base={base_model} abbr={abbr} "
+        f"iters={num_iters} train={num_train} val={num_val} seed={seed} "
+        f"c_steps={smoke_challenger_max_steps} s_steps={smoke_solver_max_steps} "
+        f"rollout_n={smoke_solver_rollout_n} ==="
+    )
+
+    result = subprocess.run(
+        [
+            "bash", "scripts/creative_coevolve_smoke.sh",
+            base_model, abbr,
+            str(num_iters), str(num_train), str(num_val), str(seed),
+        ],
+        env=env,
+        cwd=repo,
+        check=False,
+    )
+
+    # Always commit artefacts written so far (partial runs are useful)
+    volume.commit()
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"creative_coevolve_smoke.sh exited with code {result.returncode}"
+        )
+
+    print("=== Creative co-evolution complete — artefacts committed to volume ===")
+
+
+@app.local_entrypoint()
+def coevolve_smoke(
+    base_model: str = "Qwen/Qwen3-4B-Base",
+    abbr: str = "qwen3-4b-coevolve-smoke",
+    num_iters: int = 2,
+    num_train: int = 8,
+    num_val: int = 2,
+    seed: int = 42,
+    smoke_challenger_max_steps: int = 4,
+    smoke_solver_max_steps: int = 4,
+    smoke_solver_rollout_n: int = 4,
+):
+    """
+    Co-evolving creative challenger + solver smoke test.
+
+    Alternates challenger and solver training for num_iters rounds.  Each
+    model uses the other's latest merged checkpoint — the solver forces the
+    challenger to generate harder prompts; the harder prompts push the solver
+    to improve.
+
+    Checkpoint layout on the volume after N iterations:
+      models/<abbr>_iter1_challenger_v1/global_step_<c_merge>/actor/huggingface/
+      models/<abbr>_iter1_solver_v1/global_step_<s_merge>/actor/huggingface/
+      models/<abbr>_iter2_challenger_v1/…
+      models/<abbr>_iter2_solver_v1/…
+      …
+
+    CLI:
+        # Quick smoke (2 iterations, default sizes):
+        modal run --detach modal_run.py::coevolve_smoke
+
+        # Custom model / scale:
+        modal run --detach modal_run.py::coevolve_smoke \\
+            --base-model Qwen/Qwen3-4B-Base \\
+            --abbr my-coevolve \\
+            --num-iters 3 \\
+            --num-train 8 \\
+            --smoke-challenger-max-steps 4 \\
+            --smoke-solver-max-steps 4 \\
+            --smoke-solver-rollout-n 4
+    """
+    fc = train_creative_coevolve.spawn(
+        base_model=base_model,
+        abbr=abbr,
+        num_iters=num_iters,
+        num_train=num_train,
+        num_val=num_val,
+        seed=seed,
+        smoke_challenger_max_steps=smoke_challenger_max_steps,
+        smoke_solver_max_steps=smoke_solver_max_steps,
+        smoke_solver_rollout_n=smoke_solver_rollout_n,
+    )
+    print(f"=== Co-evolution submitted (function call: {fc.object_id}) ===")

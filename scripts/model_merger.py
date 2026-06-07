@@ -180,8 +180,32 @@ if __name__ == "__main__":
     model.to_empty(device="cpu")
 
     print(f"Saving model to {hf_path}...")
-    model.save_pretrained(hf_path, state_dict=state_dict)
+    model.save_pretrained(hf_path, state_dict=state_dict, safe_serialization=True)
     del state_dict, model
+
+    # ---------------------------------------------------------------------------
+    # Verify that actual weight files were written.  Missing weights are the most
+    # common silent failure mode (OOM during save, key-name mismatch, etc.) and
+    # produce a checkpoint that looks valid (config.json + tokenizer present) but
+    # cannot be loaded.  Fail loudly here rather than discovering it later when a
+    # downstream script tries to load the model.
+    # ---------------------------------------------------------------------------
+    import glob as _glob
+    weight_files = (
+        _glob.glob(os.path.join(hf_path, "model*.safetensors"))
+        + _glob.glob(os.path.join(hf_path, "pytorch_model*.bin"))
+    )
+    if not weight_files:
+        raise RuntimeError(
+            f"[model_merger] save_pretrained did not produce any weight files in:\n"
+            f"  {hf_path}\n"
+            f"Files present: {os.listdir(hf_path)}\n"
+            f"Possible causes:\n"
+            f"  1. save_pretrained raised an error that was swallowed.\n"
+            f"  2. state_dict keys do not match the HF model architecture.\n"
+            f"  3. The process ran out of CPU RAM during serialisation."
+        )
+    print(f"[OK] Model weights saved: {[os.path.basename(f) for f in weight_files]}")
 
     if args.hf_upload_path:
         upload_model_to_huggingface(hf_path, args.hf_upload_path)
