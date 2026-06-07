@@ -1869,13 +1869,13 @@ def coevolve_smoke(
         modal run --detach modal_run.py::coevolve_smoke
 
         # Custom model / scale:
-        modal run --detach modal_run.py::coevolve_smoke \\
-            --base-model Qwen/Qwen3-4B-Base \\
-            --abbr my-coevolve \\
-            --num-iters 3 \\
-            --num-train 8 \\
-            --smoke-challenger-max-steps 4 \\
-            --smoke-solver-max-steps 4 \\
+        modal run --detach modal_run.py::coevolve_smoke \
+            --base-model Qwen/Qwen3-4B-Base \
+            --abbr my-coevolve \
+            --num-iters 3 \
+            --num-train 16 \
+            --smoke-challenger-max-steps 4 \
+            --smoke-solver-max-steps 4 \
             --smoke-solver-rollout-n 4
     """
     fc = train_creative_coevolve.spawn(

@@ -125,6 +125,10 @@ from pathlib import Path
 import pandas as pd
 from question_generate.one_shot_creative_question_generate import WritingPrompt
 
+_iteration          = int(os.environ.get("COEVOLVE_ITERATION", "1"))
+_run_id             = os.environ.get("SMOKE_RUN_ID", "standalone")
+_challenger_ckpt    = "$challenger_checkpoint"
+
 prompts_json = "${PROMPTS_JSON}"
 out_dir      = Path("${STORAGE_PATH}/creative_smoke")
 out_dir.mkdir(parents=True, exist_ok=True)
@@ -160,9 +164,32 @@ train_prompts = valid[:num_train]
 val_prompts   = valid[num_train : num_train + num_val]
 
 def make_row(wp: WritingPrompt) -> dict:
+    req = wp.requirements.to_dict() if wp.requirements else {}
     return {
-        "problem": wp.query,          # solver's input prompt
-        "answer":  json.dumps(wp.to_dict()),  # WritingPrompt.to_dict() → ground_truth
+        # VERL required — answer holds the full WritingPrompt JSON so the
+        # reward function (creative_solver_caller.py) can reconstruct the
+        # prompt_id, query, and criteria without a separate lookup.
+        "problem":                  wp.query,
+        "answer":                   json.dumps(wp.to_dict()),
+        # WritingPrompt fields as queryable columns (no JSON parsing needed)
+        "prompt_id":                wp.prompt_id,
+        "domain":                   wp.domain,
+        "domain_name":              wp.domain_name,
+        "subdomain":                wp.subdomain,
+        "num_criteria":             len(wp.criteria),
+        "criteria_json":            json.dumps(wp.criteria),
+        "requirements_style":       req.get("style") or "",
+        "requirements_format":      req.get("format") or "",
+        "requirements_length":      req.get("length") or "",
+        "guidance_applied_json":    json.dumps(wp.guidance_applied),
+        "num_guidance_applied":     len(wp.guidance_applied),
+        "format_score":             wp.format_score,
+        "language":                 wp.language,
+        "seed":                     wp.seed,
+        # run provenance
+        "iteration":                _iteration,
+        "run_id":                   _run_id,
+        "challenger_checkpoint":    _challenger_ckpt,
     }
 
 train_path = out_dir / "${Model_abbr}_solver_train.parquet"
@@ -171,7 +198,10 @@ val_path   = out_dir / "${Model_abbr}_solver_val.parquet"
 pd.DataFrame([make_row(wp) for wp in train_prompts]).to_parquet(train_path, index=False)
 pd.DataFrame([make_row(wp) for wp in val_prompts]).to_parquet(val_path,   index=False)
 
-print(f"  [OK] train={len(train_prompts)}  val={len(val_prompts)}  -> {out_dir}")
+cols = list(pd.DataFrame([make_row(train_prompts[0])]).columns)
+print(f"  [OK] train={len(train_prompts)}  val={len(val_prompts)}  iter={_iteration}  run={_run_id}")
+print(f"       columns ({len(cols)}): {cols}")
+print(f"       -> {out_dir}")
 PYEOF
 
 echo "Parquet build done."
@@ -210,7 +240,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main \
     worker.actor.micro_batch_size_per_device_for_experience=1 \
     trainer.max_steps="$S_STEPS" \
     trainer.save_freq=1 \
-    trainer.logger='[console]'
+    trainer.project_name="r-zero-creative" \
+    trainer.logger='[console,wandb]'
 
 echo "Solver training done — merging checkpoint at global_step_${S_MERGE}"
 sleep 5

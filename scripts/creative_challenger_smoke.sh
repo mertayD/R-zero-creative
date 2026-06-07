@@ -79,22 +79,48 @@ sys.path.insert(0, os.environ.get("REMOTE_REPO_PATH", "/root/R-Zero"))
 from pathlib import Path
 import pandas as pd
 from question_generate.one_shot_creative_question_generate import DomainSampler, build_one_shot_prompt
+from question_generate.creative_writing_prompts import WRITING_DOMAINS
 
-sampler = DomainSampler(seed=int("$seed"))
+_seed            = int("$seed")
+_iteration       = int(os.environ.get("COEVOLVE_ITERATION", "1"))
+_run_id          = os.environ.get("SMOKE_RUN_ID", "standalone")
+_challenger_init = "$challenger_model"
+_solver_oracle   = "$solver_model"
+
+sampler = DomainSampler(seed=_seed)
 out_dir = Path("${STORAGE_PATH}/creative_smoke")
 out_dir.mkdir(parents=True, exist_ok=True)
 
 def make_row():
     domain_key, subdomain = sampler.sample_domain_subdomain_pair()
+    domain_name           = WRITING_DOMAINS[domain_key].get("name", domain_key)
     _, user_prompt, _     = build_one_shot_prompt(domain_key, subdomain)
-    return {"problem": user_prompt, "answer": ""}
+    return {
+        # VERL required — reward fn ignores answer for challenger training
+        "problem":               user_prompt,
+        "answer":                "",
+        # domain provenance — reconstruct exact prompt from these + seed
+        "domain":                domain_key,
+        "domain_name":           domain_name,
+        "subdomain":             subdomain,
+        # run provenance
+        "seed":                  _seed,
+        "iteration":             _iteration,
+        "run_id":                _run_id,
+        "challenger_init_model": _challenger_init,
+        "solver_oracle_model":   _solver_oracle,
+    }
 
 train_rows = [make_row() for _ in range(int("$num_train"))]
 val_rows   = [make_row() for _ in range(int("$num_val"))]
 
 pd.DataFrame(train_rows).to_parquet(out_dir / "${Model_abbr}_train.parquet", index=False)
 pd.DataFrame(val_rows).to_parquet(out_dir   / "${Model_abbr}_val.parquet",   index=False)
-print(f"[OK] train={len(train_rows)}  val={len(val_rows)}  -> {out_dir}")
+
+cols = list(pd.DataFrame(train_rows).columns)
+print(f"[OK] train={len(train_rows)}  val={len(val_rows)}  iter={_iteration}  seed={_seed}  run={_run_id}")
+print(f"     columns ({len(cols)}): {cols}")
+print(f"     -> {out_dir}")
 PYEOF
 
 echo "Parquet conversion done."
@@ -162,7 +188,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main \
     worker.actor.micro_batch_size_per_device_for_experience=1 \
     trainer.max_steps="$C_STEPS" \
     trainer.save_freq=1 \
-    trainer.logger='[console]'
+    trainer.project_name="r-zero-creative" \
+    trainer.logger='[console,wandb]'
 
 echo "Challenger training done — merging checkpoint at global_step_${C_MERGE}"
 sleep 5

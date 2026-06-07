@@ -35,7 +35,7 @@
 
 set -euo pipefail
 
-export WANDB_MODE="${WANDB_MODE:-disabled}"
+export WANDB_MODE="${WANDB_MODE:-online}"
 rm -rf /tmp/torchinductor_root /tmp/tinductor_* 2>/dev/null || true
 
 base_model="$1"
@@ -155,6 +155,11 @@ current_challenger="$base_model"
 
 for iter in $(seq 1 "$num_iters"); do
     iter_abbr="${Model_abbr}_iter${iter}"
+
+    # TODO: I don't like this eport statement, after smoke run update this
+    # Export iteration number so creative_challenger_smoke.sh and
+    # creative_solver_smoke.sh can stamp it on every parquet row.
+    export COEVOLVE_ITERATION="$iter"
 
     echo ""
     echo "=========================================================="
