@@ -59,7 +59,6 @@ RUN_TS=$(date +%Y%m%d_%H%M%S)
 SMOKE_BASE_ABBR="$Model_abbr"         # original abbr, captured before timestamp
 Model_abbr="${Model_abbr}_${RUN_TS}"
 export SMOKE_RUN_ID="$RUN_TS"
-export SMOKE_BASE_ABBR
 
 # Read from env with defaults, then re-export so subscripts see the same values
 C_STEPS="${SMOKE_CHALLENGER_MAX_STEPS:-4}"
@@ -123,6 +122,31 @@ verify_checkpoint() {
 }
 
 # ---------------------------------------------------------------------------
+# upload_parquets_to_hf <hf_train> <local_train> <hf_val> <local_val>
+#
+# Uploads a train/val parquet pair to {HUGGINGFACENAME}/r-zero-creative-datasets.
+# Non-fatal: skips with a warning if credentials are missing.
+# HF layout: {base_abbr}/{RUN_TS}/iter{N}/{role}_{split}.parquet
+# ---------------------------------------------------------------------------
+upload_parquets_to_hf() {
+    local hf_train="$1" local_train="$2" hf_val="$3" local_val="$4"
+    local repo_id="${HUGGINGFACENAME}/r-zero-creative-datasets"
+
+    if [ -z "${HF_TOKEN:-}" ] || [ -z "${HUGGINGFACENAME:-}" ]; then
+        echo "    [HF] HF_TOKEN or HUGGINGFACENAME not set — skipping upload"
+        return 0
+    fi
+
+    echo "    [HF] → ${repo_id}/${hf_train%/*}/"
+    huggingface-cli upload "$repo_id" "$local_train" "$hf_train" \
+        --repo-type dataset --token "$HF_TOKEN" \
+        || echo "    [HF] ✗ upload failed: $hf_train"
+    huggingface-cli upload "$repo_id" "$local_val" "$hf_val" \
+        --repo-type dataset --token "$HF_TOKEN" \
+        || echo "    [HF] ✗ upload failed: $hf_val"
+}
+
+# ---------------------------------------------------------------------------
 # Iteration loop
 # ---------------------------------------------------------------------------
 # Start with base model for both roles
@@ -160,6 +184,13 @@ for iter in $(seq 1 "$num_iters"); do
     new_challenger_ckpt="${STORAGE_PATH}/models/${iter_abbr}_challenger_v1/global_step_${C_MERGE}/actor/huggingface"
     verify_checkpoint "Challenger iter${iter}" "$new_challenger_ckpt"
 
+    hf_prefix="${SMOKE_BASE_ABBR}/${RUN_TS}/iter${iter}"
+    upload_parquets_to_hf \
+        "${hf_prefix}/challenger_train.parquet" \
+        "${STORAGE_PATH}/creative_smoke/${iter_abbr}_train.parquet" \
+        "${hf_prefix}/challenger_val.parquet" \
+        "${STORAGE_PATH}/creative_smoke/${iter_abbr}_val.parquet"
+
     # -----------------------------------------------------------------------
     # Phase B: Train solver
     #   solver_model          = current_solver      → model being trained
@@ -178,6 +209,12 @@ for iter in $(seq 1 "$num_iters"); do
 
     new_solver_ckpt="${STORAGE_PATH}/models/${iter_abbr}_solver_v1/global_step_${S_MERGE}/actor/huggingface"
     verify_checkpoint "Solver iter${iter}" "$new_solver_ckpt"
+
+    upload_parquets_to_hf \
+        "${hf_prefix}/solver_train.parquet" \
+        "${STORAGE_PATH}/creative_smoke/${iter_abbr}_solver_train.parquet" \
+        "${hf_prefix}/solver_val.parquet" \
+        "${STORAGE_PATH}/creative_smoke/${iter_abbr}_solver_val.parquet"
 
     # Advance both pointers for the next iteration
     current_challenger="$new_challenger_ckpt"
