@@ -63,6 +63,67 @@ from question_generate.one_shot_creative_question_generate import WritingPrompt
 _MAX_WORKERS = int(os.environ.get("CREATIVE_SCORER_MAX_WORKERS", "4"))
 
 # ---------------------------------------------------------------------------
+# Per-rollout JSONL logger
+# ---------------------------------------------------------------------------
+# Appends one line per rollout per compute_score call to a sidecar file:
+#   {STORAGE_PATH}/reward_logs/{VERL_EXPERIMENT_NAME}.jsonl
+#
+# Schema per line:
+#   step          — monotonic call counter (not VERL's global step, but
+#                   proportional to it: one increment per compute_score call)
+#   prompt_id     — WritingPrompt.prompt_id (from ground_truth)
+#   domain        — wp.domain  (e.g. "D1")
+#   domain_name   — wp.domain_name
+#   subdomain     — wp.subdomain
+#   num_criteria  — len(wp.criteria)
+#   response_preview — first 400 chars of the solver's rollout response
+#   raw_score     — avg criterion score 1–10 from Claude
+#   rank_reward   — normalised rank reward [0, 1] (GRPO signal)
+#   accuracy      — raw_score / 10  (logged metric)
+#
+# The file is uploaded to W&B as a Table by creative_solver_smoke.sh after
+# training completes.
+# ---------------------------------------------------------------------------
+_solver_step: int = 0
+
+
+def _log_solver_rollouts(
+    groups: "OrderedDict[str, dict]",
+    raw_scores: List[float],
+    rewards: List[Dict[str, float]],
+) -> None:
+    global _solver_step
+    _solver_step += 1
+
+    storage  = os.environ.get("STORAGE_PATH", "/tmp")
+    exp_name = os.environ.get("VERL_EXPERIMENT_NAME", "unknown_experiment")
+    log_dir  = os.path.join(storage, "reward_logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, f"{exp_name}.jsonl")
+
+    entries: List[str] = []
+    for group in groups.values():
+        wp: WritingPrompt = group["wp"]
+        for idx, response_text in group["samples"]:
+            entries.append(json.dumps({
+                "step":             _solver_step,
+                "prompt_id":        wp.prompt_id,
+                "domain":           wp.domain,
+                "domain_name":      wp.domain_name,
+                "subdomain":        wp.subdomain,
+                "num_criteria":     len(wp.criteria),
+                "input_query":      wp.query,
+                "response_preview": response_text[:400],
+                "raw_score":        round(raw_scores[idx], 4),
+                "rank_reward":      round(rewards[idx].get("overall", 0.0), 4),
+                "accuracy":         round(rewards[idx].get("accuracy", 0.0), 4),
+            }))
+
+    if entries:
+        with open(log_path, "a") as f:
+            f.write("\n".join(entries) + "\n")
+
+# ---------------------------------------------------------------------------
 # Lazy singleton — BatchEvalAgent imported only on first call
 # ---------------------------------------------------------------------------
 _agent = None
@@ -248,5 +309,13 @@ def compute_score(
         f"mean_rank_reward={mean(overall_values):.3f}  (expected≈0.500)",
         flush=True,
     )
+
+    # ------------------------------------------------------------------ #
+    # Step 5 — per-rollout JSONL logging                                  #
+    # ------------------------------------------------------------------ #
+    try:
+        _log_solver_rollouts(groups, raw_scores, rewards)
+    except Exception as _log_err:
+        print(f"[creative_solver_caller] rollout logging failed: {_log_err}", flush=True)
 
     return rewards

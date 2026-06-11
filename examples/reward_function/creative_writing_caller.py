@@ -23,6 +23,7 @@ Interface matches caller_penalty.py exactly:
   here — creative writing reward comes from the Claude judge, not a reference answer.
 """
 
+import json
 import os
 import sys
 import requests
@@ -54,6 +55,62 @@ _TOP_K       = 20
 # Lazy singletons
 _agent = None
 _solver_model_id = None
+
+# ---------------------------------------------------------------------------
+# Per-rollout JSONL logger
+# ---------------------------------------------------------------------------
+# Appends one line per challenger rollout per compute_score call:
+#   {STORAGE_PATH}/reward_logs/{VERL_EXPERIMENT_NAME}.jsonl
+#
+# Schema per line:
+#   step                  — monotonic call counter
+#   rollout_idx           — position in the batch
+#   format_valid          — 1 if <output>JSON</output> parsed, 0 otherwise
+#   generated_query       — first 300 chars of the writing prompt the challenger wrote
+#   generated_criteria_n  — number of criteria in the generated prompt
+#   solver_response       — first 300 chars of the solver's answer (empty if format failed)
+#   overall               — R-Zero uncertainty reward
+#   format                — 1.0 = valid XML+JSON, 0.0 = parse failure
+#   accuracy              — avg criterion score / 10
+#
+# The file is uploaded to W&B as a Table by creative_challenger_smoke.sh after
+# training completes.
+# ---------------------------------------------------------------------------
+_challenger_step: int = 0
+
+
+def _log_challenger_rollouts(
+    parsed: List[Optional[WritingPrompt]],
+    solver_texts: Dict[int, str],
+    scores: List[Dict[str, float]],
+) -> None:
+    global _challenger_step
+    _challenger_step += 1
+
+    storage  = os.environ.get("STORAGE_PATH", "/tmp")
+    exp_name = os.environ.get("VERL_EXPERIMENT_NAME", "unknown_experiment")
+    log_dir  = os.path.join(storage, "reward_logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, f"{exp_name}.jsonl")
+
+    entries: List[str] = []
+    for idx, wp in enumerate(parsed):
+        entry = {
+            "step":                 _challenger_step,
+            "rollout_idx":          idx,
+            "format_valid":         1 if wp is not None else 0,
+            "generated_query":      wp.query[:300] if wp is not None else "",
+            "generated_criteria_n": len(wp.criteria) if wp is not None else 0,
+            "solver_response":      solver_texts.get(idx, "")[:300],
+            "overall":              round(scores[idx].get("overall", 0.0), 4),
+            "format":               round(scores[idx].get("format",  0.0), 4),
+            "accuracy":             round(scores[idx].get("accuracy", 0.0), 4),
+        }
+        entries.append(json.dumps(entry))
+
+    if entries:
+        with open(log_path, "a") as f:
+            f.write("\n".join(entries) + "\n")
 
 
 def _get_agent():
@@ -188,5 +245,10 @@ def compute_score(
             }
             for future in as_completed(futures):
                 scores[futures[future]] = future.result()
+
+    try:
+        _log_challenger_rollouts(parsed, solver_texts, scores)
+    except Exception as _log_err:
+        print(f"[creative_writing_caller] rollout logging failed: {_log_err}", flush=True)
 
     return scores

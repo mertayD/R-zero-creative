@@ -163,6 +163,9 @@ echo ">>> Step 2 — Training challenger ($challenger_model, $C_STEPS steps)"
 TRAIN_PARQUET="${STORAGE_PATH}/creative_smoke/${Model_abbr}_train.parquet"
 VAL_PARQUET="${STORAGE_PATH}/creative_smoke/${Model_abbr}_val.parquet"
 
+# Tell the reward function which JSONL file to write rollout logs to.
+export VERL_EXPERIMENT_NAME="$SAVE_NAME"
+
 CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main \
     config=examples/config.yaml \
     data.train_files="$TRAIN_PARQUET" \
@@ -203,7 +206,48 @@ python scripts/model_merger.py \
 echo "Checkpoint merged."
 
 # ---------------------------------------------------------------------------
-# Step 4: Kill vLLM server
+# Step 4: Upload per-rollout reward log to W&B as a Table
+# ---------------------------------------------------------------------------
+echo ""
+echo ">>> Step 4 — Uploading rollout reward log to W&B"
+
+python3 - <<PYEOF
+import os, sys, json
+sys.path.insert(0, os.environ.get("REMOTE_REPO_PATH", "/root/R-Zero"))
+
+if os.environ.get("WANDB_MODE", "online") == "disabled":
+    print("[W&B] WANDB_MODE=disabled — skipping rollout upload")
+else:
+    try:
+        import wandb, pandas as pd
+
+        log_path = os.path.join(
+            os.environ.get("STORAGE_PATH", "/tmp"),
+            "reward_logs",
+            "${SAVE_NAME}.jsonl",
+        )
+
+        if not os.path.exists(log_path):
+            print(f"[W&B] No rollout log found at {log_path} — skipping")
+        else:
+            rows = [json.loads(line) for line in open(log_path) if line.strip()]
+            df   = pd.DataFrame(rows)
+
+            run = wandb.init(
+                project="r-zero-creative",
+                name="${SAVE_NAME}_rollouts",
+                job_type="rollout_analysis",
+                reinit=True,
+            )
+            run.log({"challenger_rollouts": wandb.Table(dataframe=df)})
+            run.finish()
+            print(f"[W&B] Uploaded {len(rows)} rollout entries from {log_path}")
+    except Exception as e:
+        print(f"[W&B] Rollout upload failed: {e}")
+PYEOF
+
+# ---------------------------------------------------------------------------
+# Step 5: Kill vLLM server
 # ---------------------------------------------------------------------------
 sleep 5
 kill "$VLLM_PID" 2>/dev/null || true

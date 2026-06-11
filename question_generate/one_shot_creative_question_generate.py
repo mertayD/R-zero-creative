@@ -430,9 +430,10 @@ OUTPUT STAGE - Return ONLY this JSON format (nothing else):
 CRITICAL REMINDERS:
 - Do NOT output your internal reasoning. Only output the JSON block.
 - Ensure the query is specific and detailed, reflecting the refinement principles you applied.
-- Each criterion must have all 5 score levels (1-2, 3-4, 5-6, 7-8, 9-10) with detailed descriptions.
+- Each 5 criterion must have all 5 score levels (1-2, 3-4, 5-6, 7-8, 9-10) with detailed descriptions.
 - Be strict in criteria design to distinguish subtle differences in quality.
-- Reference exact aspects of what makes responses succeed or fail at each level."""
+- Reference exact aspects of what makes responses succeed or fail at each level.
+- Make sure outputs are in {language} language."""
 
     return system_prompt, user_prompt, applied_guidance
 
