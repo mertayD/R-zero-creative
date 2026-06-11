@@ -1423,6 +1423,7 @@ def train_creative_challenger(
     num_val: int = 2,
     seed: int = 42,
     smoke_challenger_max_steps: int = 4,
+    smoke_challenger_rollout_n: int = 4,
 ):
     """
     Train the creative writing challenger with VERL GRPO.
@@ -1464,14 +1465,16 @@ def train_creative_challenger(
         "STORAGE_PATH":               storage,
         "HF_HOME":                    hf_cache,
         "HUGGINGFACE_HUB_CACHE":      hf_cache,
-        "SMOKE_CHALLENGER_MAX_STEPS": str(smoke_challenger_max_steps),
-        "REMOTE_REPO_PATH":           repo,
+        "SMOKE_CHALLENGER_MAX_STEPS":   str(smoke_challenger_max_steps),
+        "SMOKE_CHALLENGER_ROLLOUT_N":   str(smoke_challenger_rollout_n),
+        "REMOTE_REPO_PATH":             repo,
     }
 
     print(
         f"=== Creative Challenger Training | "
         f"solver={solver_model} challenger={challenger_model} abbr={abbr} "
-        f"num_train={num_train} num_val={num_val} steps={smoke_challenger_max_steps} ==="
+        f"num_train={num_train} num_val={num_val} steps={smoke_challenger_max_steps} "
+        f"rollout_n={smoke_challenger_rollout_n} ==="
     )
 
     subprocess.run(
@@ -1498,6 +1501,7 @@ def creative_smoke(
     num_val: int = 2,
     seed: int = 42,
     smoke_challenger_max_steps: int = 4,
+    smoke_challenger_rollout_n: int = 4,
 ):
     """
     Creative writing challenger smoke test: train challenger with VERL GRPO.
@@ -1527,6 +1531,7 @@ def creative_smoke(
         num_val=num_val,
         seed=seed,
         smoke_challenger_max_steps=smoke_challenger_max_steps,
+        smoke_challenger_rollout_n=smoke_challenger_rollout_n,
     )
     print(f"=== Challenger training submitted (function call: {fc.object_id}) ===")
 
@@ -1746,6 +1751,7 @@ def train_creative_coevolve(
     num_val: int = 2,
     seed: int = 42,
     smoke_challenger_max_steps: int = 4,
+    smoke_challenger_rollout_n: int = 4,
     smoke_solver_max_steps: int = 4,
     smoke_solver_rollout_n: int = 4,
 ):
@@ -1802,17 +1808,18 @@ def train_creative_coevolve(
         "STORAGE_PATH":               storage,
         "HF_HOME":                    hf_cache,
         "HUGGINGFACE_HUB_CACHE":      hf_cache,
-        "SMOKE_CHALLENGER_MAX_STEPS": str(smoke_challenger_max_steps),
-        "SMOKE_SOLVER_MAX_STEPS":     str(smoke_solver_max_steps),
-        "SMOKE_SOLVER_ROLLOUT_N":     str(smoke_solver_rollout_n),
-        "REMOTE_REPO_PATH":           repo,
+        "SMOKE_CHALLENGER_MAX_STEPS":   str(smoke_challenger_max_steps),
+        "SMOKE_CHALLENGER_ROLLOUT_N":   str(smoke_challenger_rollout_n),
+        "SMOKE_SOLVER_MAX_STEPS":       str(smoke_solver_max_steps),
+        "SMOKE_SOLVER_ROLLOUT_N":       str(smoke_solver_rollout_n),
+        "REMOTE_REPO_PATH":             repo,
     }
 
     print(
         f"=== Creative Co-Evolution | base={base_model} abbr={abbr} "
         f"iters={num_iters} train={num_train} val={num_val} seed={seed} "
-        f"c_steps={smoke_challenger_max_steps} s_steps={smoke_solver_max_steps} "
-        f"rollout_n={smoke_solver_rollout_n} ==="
+        f"c_steps={smoke_challenger_max_steps} c_rollout_n={smoke_challenger_rollout_n} "
+        f"s_steps={smoke_solver_max_steps} s_rollout_n={smoke_solver_rollout_n} ==="
     )
 
     result = subprocess.run(
@@ -1846,6 +1853,7 @@ def coevolve_smoke(
     num_val: int = 2,
     seed: int = 42,
     smoke_challenger_max_steps: int = 4,
+    smoke_challenger_rollout_n: int = 4,
     smoke_solver_max_steps: int = 4,
     smoke_solver_rollout_n: int = 4,
 ):
@@ -1871,12 +1879,12 @@ def coevolve_smoke(
         # Custom model / scale:
         modal run --detach modal_run.py::coevolve_smoke \
             --base-model Qwen/Qwen3-4B-Base \
-            --abbr my-coevolve \
+            --abbr mini-hero \
             --num-iters 3 \
-            --num-train 16 \
-            --smoke-challenger-max-steps 4 \
-            --smoke-solver-max-steps 4 \
-            --smoke-solver-rollout-n 4
+            --num-train 32 \
+            --smoke-challenger-max-steps 20 \
+            --smoke-solver-max-steps 32 \
+            --smoke-solver-rollout-n 8
     """
     fc = train_creative_coevolve.spawn(
         base_model=base_model,
@@ -1886,6 +1894,7 @@ def coevolve_smoke(
         num_val=num_val,
         seed=seed,
         smoke_challenger_max_steps=smoke_challenger_max_steps,
+        smoke_challenger_rollout_n=smoke_challenger_rollout_n,
         smoke_solver_max_steps=smoke_solver_max_steps,
         smoke_solver_rollout_n=smoke_solver_rollout_n,
     )

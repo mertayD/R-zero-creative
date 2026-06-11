@@ -56,9 +56,8 @@ else
     SAVE_NAME="${Model_abbr}_solver_v1"
 fi
 
-# Cap rollout/actor batch sizes to num_train so VERL always has enough data
-ROLLOUT_BATCH=$(( num_train < 8 ? num_train : 8 ))
-ACTOR_GLOBAL_BATCH=$(( ROLLOUT_BATCH < 8 ? ROLLOUT_BATCH : 8 ))
+ROLLOUT_BATCH="$num_train"
+ACTOR_GLOBAL_BATCH="$num_train"
 
 # Total prompts to generate (train + val)
 NUM_PROMPTS=$(( num_train + num_val ))
@@ -289,6 +288,7 @@ else:
                 project="r-zero-creative",
                 name="${SAVE_NAME}_rollouts",
                 job_type="rollout_analysis",
+                group=os.environ.get("WANDB_RUN_GROUP"),
                 reinit=True,
             )
             run.log({"solver_rollouts": wandb.Table(dataframe=df)})

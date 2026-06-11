@@ -60,11 +60,50 @@ SMOKE_BASE_ABBR="$Model_abbr"         # original abbr, captured before timestamp
 Model_abbr="${Model_abbr}_${RUN_TS}"
 export SMOKE_RUN_ID="$RUN_TS"
 
+# ---------------------------------------------------------------------------
+# W&B: group all runs (parent summary, VERL trainer, rollout tables) under one
+# W&B group so they appear together in the UI.  WANDB_RUN_GROUP is read
+# automatically by every wandb.init() call in this process tree — no extra
+# plumbing needed in sub-scripts or VERL.
+# ---------------------------------------------------------------------------
+export WANDB_RUN_GROUP="coevolve_${Model_abbr}"
+
+if [ "${WANDB_MODE}" != "disabled" ]; then
+    python3 - <<PYEOF
+import os, sys
+try:
+    import wandb
+    run = wandb.init(
+        project="r-zero-creative",
+        job_type="coevolve_summary",
+        name="coevolve_${Model_abbr}",
+        group=os.environ["WANDB_RUN_GROUP"],
+        config={
+            "base_model":  "${base_model}",
+            "num_iters":   ${num_iters},
+            "num_train":   ${num_train},
+            "num_val":     ${num_val},
+            "seed":        ${seed},
+            "c_steps":     ${C_STEPS:-4},
+            "s_steps":     ${S_STEPS:-4},
+            "smoke_run_id": "${RUN_TS}",
+        },
+        tags=["coevolve"],
+    )
+    wandb.finish()
+    print(f"[W&B] Group: {os.environ['WANDB_RUN_GROUP']}")
+except Exception as e:
+    print(f"[W&B] Summary run skipped: {e}", file=sys.stderr)
+PYEOF
+fi
+
 # Read from env with defaults, then re-export so subscripts see the same values
 C_STEPS="${SMOKE_CHALLENGER_MAX_STEPS:-4}"
 S_STEPS="${SMOKE_SOLVER_MAX_STEPS:-4}"
+C_ROLLOUT_N="${SMOKE_CHALLENGER_ROLLOUT_N:-4}"
 export SMOKE_CHALLENGER_MAX_STEPS="$C_STEPS"
 export SMOKE_SOLVER_MAX_STEPS="$S_STEPS"
+export SMOKE_CHALLENGER_ROLLOUT_N="$C_ROLLOUT_N"
 
 C_MERGE=$((C_STEPS - 1))
 S_MERGE=$((S_STEPS - 1))

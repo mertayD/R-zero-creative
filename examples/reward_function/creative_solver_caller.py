@@ -42,7 +42,7 @@ VERL uses `overall` for the GRPO update; `accuracy` is logged as a metric.
 import json
 import os
 import sys
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from statistics import mean
 from typing import Dict, List, Tuple
@@ -61,7 +61,9 @@ from question_generate.one_shot_creative_question_generate import WritingPrompt
 # Concurrent Claude calls — keep below ~50 RPM rate limit.
 # Raise via CREATIVE_SCORER_MAX_WORKERS if your API tier allows more.
 _MAX_WORKERS = int(os.environ.get("CREATIVE_SCORER_MAX_WORKERS", "4"))
-
+# When calculating Normalized Rank Score we should set a min score.
+# otherwise bad examples could leak in to higher ranks if all of the samples are bad.
+_MIN_SCORE = 0.3
 # ---------------------------------------------------------------------------
 # Per-rollout JSONL logger
 # ---------------------------------------------------------------------------
@@ -124,9 +126,28 @@ def _log_solver_rollouts(
             f.write("\n".join(entries) + "\n")
 
 # ---------------------------------------------------------------------------
-# Lazy singleton — BatchEvalAgent imported only on first call
+# Lazy singletons
 # ---------------------------------------------------------------------------
 _agent = None
+_wandb_run = None
+
+
+def _get_wandb():
+    global _wandb_run
+    if _wandb_run is not None:
+        return _wandb_run
+    if os.environ.get("WANDB_MODE") == "disabled":
+        return None
+    try:
+        import wandb
+        _wandb_run = wandb.init(
+            id=os.environ.get("WANDB_RUN_ID") or None,
+            resume="allow",
+            reinit=True,
+        )
+    except Exception as e:
+        print(f"[creative_solver_caller] W&B init failed: {e}", flush=True)
+    return _wandb_run
 
 
 def _get_agent():
@@ -197,11 +218,16 @@ def _assign_normalised_rank_rewards(
         reverse=True,
     )
 
+    if max(eval_scores.values()) < _MIN_SCORE:
+        # I have noticed for scores that are really low (
+        # where all of them are 0.1 then random example would get high reward)
+        # we are introducing min_score. We should remove this sample set.
+        return {idx: 0.0 for idx in eval_scores}
+
     # Assign normalised rank — rank starts at 1
-    for rank, (sample_idx, score) in enumerate(sorted_samples, start=1):
+    for rank, (sample_idx, _score) in enumerate(sorted_samples, start=1):
         normalized_reward = (G_eff - rank) / (G_eff - 1)
         rewards[sample_idx] = round(normalized_reward, 4)
-
     return rewards
 
 
@@ -282,6 +308,7 @@ def compute_score(
     # Step 3 — per-group normalised rank rewards                          #
     # ------------------------------------------------------------------ #
     rewards: List[Dict[str, float]] = [{} for _ in range(n_samples)]
+    n_rejected_groups: int = 0
 
     for group in groups.values():
         # G_eff = actual number of rollouts received for this prompt
@@ -289,6 +316,9 @@ def compute_score(
             idx: raw_scores[idx]
             for idx, _ in group["samples"]
         }
+
+        if eval_scores_group and max(eval_scores_group.values()) < _MIN_SCORE:
+            n_rejected_groups += 1
 
         rank_rewards = _assign_normalised_rank_rewards(eval_scores_group)
 
@@ -311,7 +341,40 @@ def compute_score(
     )
 
     # ------------------------------------------------------------------ #
-    # Step 5 — per-rollout JSONL logging                                  #
+    # Step 5 — W&B metrics                                                #
+    # ------------------------------------------------------------------ #
+    try:
+        wb = _get_wandb()
+        if wb is not None:
+            n_below = sum(1 for s in raw_scores if s <= _MIN_SCORE)
+
+            domain_raw: dict = defaultdict(list)
+            for group in groups.values():
+                wp = group["wp"]
+                for idx, _ in group["samples"]:
+                    domain_raw[wp.domain_name].append(raw_scores[idx])
+
+            n_groups = len(groups)
+            log_dict = {
+                "solver/mean_rank_reward":    mean(overall_values),
+                "solver/mean_raw_score":      mean(raw_scores) if raw_scores else 0.0,
+                "solver/num_below_min_score": n_below,
+                "solver/pct_below_min_score": n_below / n_samples if n_samples else 0.0,
+                "solver/num_groups":          n_groups,
+                "solver/num_samples":         n_samples,
+                "solver/num_rejected_groups": n_rejected_groups,
+                "solver/pct_rejected_groups": n_rejected_groups / n_groups if n_groups else 0.0,
+            }
+            for domain_name, scores in domain_raw.items():
+                key = domain_name.lower().replace(" ", "_")
+                log_dict[f"solver/domain/{key}/mean_raw_score"] = mean(scores)
+
+            wb.log(log_dict, step=_solver_step)
+    except Exception as _wb_err:
+        print(f"[creative_solver_caller] W&B logging failed: {_wb_err}", flush=True)
+
+    # ------------------------------------------------------------------ #
+    # Step 6 — per-rollout JSONL logging                                  #
     # ------------------------------------------------------------------ #
     try:
         _log_solver_rollouts(groups, raw_scores, rewards)

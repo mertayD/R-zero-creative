@@ -32,6 +32,7 @@ num_val="${5:-2}"
 seed="${6:-42}"
 
 C_STEPS="${SMOKE_CHALLENGER_MAX_STEPS:-4}"
+C_ROLLOUT_N="${SMOKE_CHALLENGER_ROLLOUT_N:-4}"
 C_MERGE=$((C_STEPS - 1))
 
 # ---------------------------------------------------------------------------
@@ -52,9 +53,8 @@ else
     SAVE_NAME="${Model_abbr}_challenger_v1"
 fi
 
-# Cap rollout/actor batch sizes to num_train so VERL always has enough data
-ROLLOUT_BATCH=$(( num_train < 8 ? num_train : 8 ))
-ACTOR_GLOBAL_BATCH=$(( ROLLOUT_BATCH < 8 ? ROLLOUT_BATCH : 8 ))
+ROLLOUT_BATCH="$num_train"
+ACTOR_GLOBAL_BATCH="$num_train"
 
 echo "=========================================================="
 echo " Creative Writing Challenger Smoke Training"
@@ -183,7 +183,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main \
     worker.reward.reward_function=./examples/reward_function/creative_writing_caller.py:compute_score \
     trainer.val_freq=-1 \
     trainer.n_gpus_per_node=4 \
-    worker.rollout.n=2 \
+    worker.rollout.n="$C_ROLLOUT_N" \
     worker.rollout.enforce_eager=true \
     worker.actor.use_torch_compile=false \
     worker.actor.global_batch_size="$ACTOR_GLOBAL_BATCH" \
@@ -237,6 +237,7 @@ else:
                 project="r-zero-creative",
                 name="${SAVE_NAME}_rollouts",
                 job_type="rollout_analysis",
+                group=os.environ.get("WANDB_RUN_GROUP"),
                 reinit=True,
             )
             run.log({"challenger_rollouts": wandb.Table(dataframe=df)})

@@ -37,6 +37,16 @@ import regex as re
 import vllm
 from transformers import AutoTokenizer
 
+try:
+    import wandb as _wandb
+    _WANDB_AVAILABLE = True
+except ImportError:
+    _WANDB_AVAILABLE = False
+
+
+def _wandb_active() -> bool:
+    return _WANDB_AVAILABLE and _wandb.run is not None
+
 # Import WritingBench framework
 from question_generate.creative_writing_prompts import (
     WRITING_DOMAINS,
@@ -632,6 +642,34 @@ def main(args):
         print(f"ERROR: Failed to load vLLM model {args.model}: {e}", file=sys.stderr)
         sys.exit(1)
 
+    _coevolve_iter = int(os.getenv("COEVOLVE_ITERATION", "0"))
+    _wandb_parent_run_id = os.getenv("WANDB_RUN_ID")
+    _wandb_owned = False  # whether we created the run (and should finish it)
+
+    if _WANDB_AVAILABLE and os.getenv("WANDB_MODE") != "disabled":
+        if _wandb_parent_run_id:
+            # Attach to the coevolve parent run created by creative_coevolve_smoke.sh
+            _wandb.init(
+                project=os.getenv("WANDB_PROJECT", "r-zero"),
+                id=_wandb_parent_run_id,
+                resume="allow",
+            )
+        else:
+            # Standalone invocation — create our own run
+            _wandb.init(
+                project=os.getenv("WANDB_PROJECT", "r-zero"),
+                job_type="prompt-generation",
+                name=f"prompt-gen_{args.save_name}_{args.suffix}_iter{_coevolve_iter}",
+                config={
+                    "model": args.model,
+                    "num_samples": args.num_samples,
+                    "seed": args.seed,
+                    "format_retries": args.format_retries,
+                    "coevolve_iteration": _coevolve_iter,
+                },
+            )
+            _wandb_owned = True
+
     print(f"\nGenerating {args.num_samples} writing prompts")
     print(f"Model: {args.model}\n")
 
@@ -705,6 +743,27 @@ def main(args):
     else:
         print(f"  ERROR: Output file not found at {out_path}")
     print(f"{'=' * 80}")
+
+    if _wandb_active():
+        metrics = {
+            "prompt_gen/total_generated": log["total_generated"],
+            "prompt_gen/total_attempted": log["total_attempted"],
+            "prompt_gen/skipped": log["skipped"],
+            "prompt_gen/format_validation_failures": log["format_validation_failures"],
+            "prompt_gen/success_rate": log["total_generated"] / max(log["total_attempted"], 1),
+            "prompt_gen/avg_criteria_per_prompt": avg_criteria,
+            "prompt_gen/avg_guidance_per_prompt": avg_guidance,
+            "prompt_gen/unique_domains": len(batch.domains_sampled),
+            "prompt_gen/unique_subdomains": len(batch.subdomains_sampled),
+        }
+        if batch.prompts:
+            table = _wandb.Table(columns=["prompt_id", "domain", "subdomain", "query_preview", "num_criteria", "num_guidance"])
+            for p in batch.prompts:
+                table.add_data(p.prompt_id, p.domain, p.subdomain, p.query[:150], len(p.criteria), len(p.guidance_applied))
+            metrics["prompt_gen/prompts"] = table
+        _wandb.log(metrics, step=_coevolve_iter)
+        if _wandb_owned:
+            _wandb.finish()
 
 
 if __name__ == "__main__":

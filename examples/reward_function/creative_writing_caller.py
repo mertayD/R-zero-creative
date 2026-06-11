@@ -55,6 +55,25 @@ _TOP_K       = 20
 # Lazy singletons
 _agent = None
 _solver_model_id = None
+_wandb_run = None
+
+
+def _get_wandb():
+    global _wandb_run
+    if _wandb_run is not None:
+        return _wandb_run
+    if os.environ.get("WANDB_MODE") == "disabled":
+        return None
+    try:
+        import wandb
+        _wandb_run = wandb.init(
+            id=os.environ.get("WANDB_RUN_ID") or None,
+            resume="allow",
+            reinit=True,
+        )
+    except Exception as e:
+        print(f"[creative_writing_caller] W&B init failed: {e}", flush=True)
+    return _wandb_run
 
 # ---------------------------------------------------------------------------
 # Per-rollout JSONL logger
@@ -250,5 +269,29 @@ def compute_score(
         _log_challenger_rollouts(parsed, solver_texts, scores)
     except Exception as _log_err:
         print(f"[creative_writing_caller] rollout logging failed: {_log_err}", flush=True)
+
+    try:
+        wb = _get_wandb()
+        if wb is not None:
+            n_total   = len(predicts)
+            n_valid   = len(valid_idx)
+            n_solved  = len(solver_texts)
+            valid_scores   = [scores[i] for i in valid_idx]
+            overall_vals   = [s["overall"]  for s in valid_scores] if valid_scores else [0.0]
+            accuracy_vals  = [s["accuracy"] for s in valid_scores] if valid_scores else [0.0]
+            criteria_counts = [
+                len(parsed[i].criteria) for i in valid_idx if parsed[i] is not None
+            ]
+            wb.log({
+                "challenger/format_valid_rate":   n_valid  / n_total  if n_total  else 0.0,
+                "challenger/solver_success_rate": n_solved / n_valid  if n_valid  else 0.0,
+                "challenger/mean_overall_reward": mean(overall_vals),
+                "challenger/mean_accuracy":       mean(accuracy_vals),
+                "challenger/mean_criteria_count": mean(criteria_counts) if criteria_counts else 0.0,
+                "challenger/num_valid":           n_valid,
+                "challenger/num_samples":         n_total,
+            }, step=_challenger_step)
+    except Exception as _wb_err:
+        print(f"[creative_writing_caller] W&B logging failed: {_wb_err}", flush=True)
 
     return scores
