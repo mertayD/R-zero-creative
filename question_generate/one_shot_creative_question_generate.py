@@ -519,8 +519,18 @@ def generate_prompts_batch(
     batch = PromptBatch(batch_id=batch_id)
 
     prompt_counter = 0
+    # Safety cap: avoid infinite loops if the model is consistently broken.
+    max_total_attempts = num_prompts * (num_format_retries + 2)
+    total_attempts = 0
 
-    for sample_idx in range(num_prompts):
+    while len(batch.prompts) < num_prompts:
+        if total_attempts >= max_total_attempts:
+            print(
+                f"  [WARN] Reached attempt cap ({max_total_attempts}); "
+                f"collected {len(batch.prompts)}/{num_prompts} valid prompts."
+            )
+            break
+
         # Sample domain and subdomain
         domain_key, subdomain = sampler.sample_domain_subdomain_pair()
         domain_name = WRITING_DOMAINS[domain_key]['name']
@@ -543,13 +553,13 @@ def generate_prompts_batch(
         else:
             prompt = f"system: {system_prompt}\n\nuser: {user_prompt}"
 
-        # Generate with retries
+        # Generate with retries for this slot
         attempt = 0
         format_valid = False
-        response = None
         parsed_json = None
 
         while attempt < num_format_retries and not format_valid:
+            total_attempts += 1
             sampling_params = vllm.SamplingParams(
                 max_tokens=4096,
                 temperature=1.0,
@@ -561,47 +571,48 @@ def generate_prompts_batch(
             completions = model.generate([prompt], sampling_params=sampling_params)
             response = completions[0].outputs[0].text
 
-            # Validate format (with full WritingBench criteria structure)
             is_valid, parsed_json = validate_one_shot_response(response)
 
             if is_valid:
                 format_valid = True
-                prompt_counter += 1
-                prompt_id = f"prompt_{prompt_counter:04d}"
-
-                # Extract requirements (from generated output)
-                requirements_data = parsed_json.get("requirements", {})
-                requirements = QueryRequirements(
-                    style=requirements_data.get("style"),
-                    format=requirements_data.get("format"),
-                    length=requirements_data.get("length"),
-                )
-
-                # Create WritingPrompt with all metadata
-                writing_prompt = WritingPrompt(
-                    prompt_id=prompt_id,
-                    domain=domain_key,
-                    domain_name=domain_name,
-                    subdomain=subdomain,
-                    query=parsed_json['query'],
-                    criteria=parsed_json.get('criteria', []),  # Full criteria with 1-10 scoring
-                    requirements=requirements,
-                    guidance_applied=applied_guidance,  # Track which guidance was applied
-                    format_score=1,
-                    seed=seed,
-                )
-
-                batch.add_prompt(writing_prompt)
-                print(f"  [{sample_idx + 1}/{num_prompts}] ✓ {domain_key}/{subdomain} | criteria: {len(writing_prompt.criteria)} | guidance: {len(applied_guidance)}")
-
             else:
                 attempt += 1
                 if attempt < num_format_retries:
-                    print(f"  [{sample_idx + 1}/{num_prompts}] Format validation failed, retrying...")
-                else:
-                    batch.generation_log["format_validation_failures"] += 1
-                    batch.add_prompt(None)
-                    print(f"  [{sample_idx + 1}/{num_prompts}] ✗ Format validation failed after {num_format_retries} attempts")
+                    print(f"  [{len(batch.prompts) + 1}/{num_prompts}] Format validation failed, retrying...")
+
+        if format_valid:
+            prompt_counter += 1
+            prompt_id = f"prompt_{prompt_counter:04d}"
+
+            requirements_data = parsed_json.get("requirements", {})
+            requirements = QueryRequirements(
+                style=requirements_data.get("style"),
+                format=requirements_data.get("format"),
+                length=requirements_data.get("length"),
+            )
+
+            writing_prompt = WritingPrompt(
+                prompt_id=prompt_id,
+                domain=domain_key,
+                domain_name=domain_name,
+                subdomain=subdomain,
+                query=parsed_json['query'],
+                criteria=parsed_json.get('criteria', []),
+                requirements=requirements,
+                guidance_applied=applied_guidance,
+                format_score=1,
+                seed=seed,
+            )
+
+            batch.add_prompt(writing_prompt)
+            print(f"  [{len(batch.prompts)}/{num_prompts}] ✓ {domain_key}/{subdomain} | criteria: {len(writing_prompt.criteria)} | guidance: {len(applied_guidance)}")
+        else:
+            batch.generation_log["format_validation_failures"] += 1
+            print(
+                f"  [{len(batch.prompts) + 1}/{num_prompts}] ✗ Format failed after "
+                f"{num_format_retries} attempts — sampling new slot"
+            )
+            # Don't call batch.add_prompt(None); just loop to try a fresh slot.
 
     return batch
 
