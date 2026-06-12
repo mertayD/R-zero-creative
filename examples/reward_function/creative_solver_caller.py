@@ -56,7 +56,7 @@ for _p in (_REPO, _WB_DIR):
 
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 
-from question_generate.one_shot_creative_question_generate import WritingPrompt
+from question_generate.one_shot_creative_question_generate import WritingPrompt, is_english_output
 
 # Concurrent Claude calls — keep below ~50 RPM rate limit.
 # Raise via CREATIVE_SCORER_MAX_WORKERS if your API tier allows more.
@@ -274,6 +274,18 @@ def compute_score(
         groups[key]["samples"].append((i, pred))
 
     # ------------------------------------------------------------------ #
+    # Step 1b — language filter: skip non-English solver responses        #
+    # ------------------------------------------------------------------ #
+    language_filtered: set = set()
+    for i, pred in enumerate(predicts):
+        if not is_english_output(pred):
+            language_filtered.add(i)
+            print(
+                f"[creative_solver_caller] non-English response at idx={i}, assigning zero reward",
+                flush=True,
+            )
+
+    # ------------------------------------------------------------------ #
     # Step 2 — score all samples in parallel                              #
     # ------------------------------------------------------------------ #
     # raw_scores[i] = avg criterion score (1–10) for predicts[i]
@@ -283,26 +295,30 @@ def compute_score(
         (idx, pred, group["wp"])
         for group in groups.values()
         for idx, pred in group["samples"]
+        if idx not in language_filtered
     ]
 
     # Cap concurrency to stay within Claude API rate limits.
     # CREATIVE_SCORER_MAX_WORKERS defaults to 4; raise if your tier allows more.
-    max_workers = min(_MAX_WORKERS, len(tasks))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_idx = {
-            executor.submit(_score_one, agent, pred, wp): idx
-            for idx, pred, wp in tasks
-        }
-        for future in as_completed(future_to_idx):
-            idx = future_to_idx[future]
-            try:
-                raw_scores[idx] = future.result()
-            except Exception as e:
-                print(
-                    f"[creative_solver_caller] future failed idx={idx}: {e}",
-                    flush=True,
-                )
-                raw_scores[idx] = 0.0
+    if tasks:
+        max_workers = min(_MAX_WORKERS, len(tasks))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_idx = {
+                executor.submit(_score_one, agent, pred, wp): idx
+                for idx, pred, wp in tasks
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    raw_scores[idx] = future.result()
+                except Exception as e:
+                    print(
+                        f"[creative_solver_caller] future failed idx={idx}: {e}",
+                        flush=True,
+                    )
+                    raw_scores[idx] = 0.0
+    else:
+        max_workers = 0
 
     # ------------------------------------------------------------------ #
     # Step 3 — per-group normalised rank rewards                          #
@@ -320,14 +336,20 @@ def compute_score(
         if eval_scores_group and max(eval_scores_group.values()) < _MIN_SCORE:
             n_rejected_groups += 1
 
-        rank_rewards = _assign_normalised_rank_rewards(eval_scores_group)
+        # Exclude language-filtered samples from ranking so they don't distort
+        # the rank distribution for valid responses in the same group.
+        scoreable = {idx: s for idx, s in eval_scores_group.items() if idx not in language_filtered}
+        rank_rewards = _assign_normalised_rank_rewards(scoreable)
 
-        for idx, rank_r in rank_rewards.items():
-            rewards[idx] = {
-                "overall":  rank_r,
-                "format":   1.0,
-                "accuracy": round(raw_scores[idx] / 10.0, 4),
-            }
+        for idx, _ in group["samples"]:
+            if idx in language_filtered:
+                rewards[idx] = {"overall": 0.0, "format": 0.0, "accuracy": 0.0}
+            else:
+                rewards[idx] = {
+                    "overall":  rank_rewards.get(idx, 0.0),
+                    "format":   1.0,
+                    "accuracy": round(raw_scores[idx] / 10.0, 4),
+                }
 
     # ------------------------------------------------------------------ #
     # Step 4 — diagnostic log (mean should be ≈ 0.500)                   #
@@ -336,6 +358,7 @@ def compute_score(
     print(
         f"[creative_solver_caller] "
         f"groups={len(groups)}  samples={n_samples}  workers={max_workers}  "
+        f"language_filtered={len(language_filtered)}  "
         f"mean_rank_reward={mean(overall_values):.3f}  (expected≈0.500)",
         flush=True,
     )
@@ -362,8 +385,10 @@ def compute_score(
                 "solver/pct_below_min_score": n_below / n_samples if n_samples else 0.0,
                 "solver/num_groups":          n_groups,
                 "solver/num_samples":         n_samples,
-                "solver/num_rejected_groups": n_rejected_groups,
-                "solver/pct_rejected_groups": n_rejected_groups / n_groups if n_groups else 0.0,
+                "solver/num_rejected_groups":    n_rejected_groups,
+                "solver/pct_rejected_groups":    n_rejected_groups / n_groups if n_groups else 0.0,
+                "solver/num_language_filtered":  len(language_filtered),
+                "solver/pct_language_filtered":  len(language_filtered) / n_samples if n_samples else 0.0,
             }
             for domain_name, scores in domain_raw.items():
                 key = domain_name.lower().replace(" ", "_")

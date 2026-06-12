@@ -35,6 +35,13 @@ if _REPO_ROOT not in sys.path:
 
 import regex as re
 import vllm
+
+_CJK_RE = re.compile(r'[一-鿿㐀-䶿豈-﫿\U00020000-\U0002a6df]')
+
+
+def is_english_output(text: str) -> bool:
+    """Return False if text contains CJK (Chinese/Japanese/Korean) characters."""
+    return not bool(_CJK_RE.search(text))
 from transformers import AutoTokenizer
 
 try:
@@ -144,6 +151,10 @@ class FormatValidator:
             )
             return -1, None
 
+        if query_val and not is_english_output(query_val):
+            logger.warning(f"Non-English characters detected in query: {query_val[:80]!r}")
+            return -1, None
+
         return 1, parsed
 
 
@@ -232,6 +243,7 @@ class PromptBatch:
                 "json_parse_failures": 0,
                 "network_failures": 0,
                 "format_validation_failures": 0,
+                "language_filter_failures": 0,
             }
 
     def add_prompt(self, prompt: Optional[WritingPrompt], errors: Optional[List[Dict[str, Any]]] = None):
@@ -573,12 +585,17 @@ def generate_prompts_batch(
 
             is_valid, parsed_json = validate_one_shot_response(response)
 
+            if is_valid and not is_english_output(parsed_json.get('query', '')):
+                logger.warning("Non-English characters detected in query; retrying...")
+                batch.generation_log["language_filter_failures"] += 1
+                is_valid = False
+
             if is_valid:
                 format_valid = True
             else:
                 attempt += 1
                 if attempt < num_format_retries:
-                    print(f"  [{len(batch.prompts) + 1}/{num_prompts}] Format validation failed, retrying...")
+                    print(f"  [{len(batch.prompts) + 1}/{num_prompts}] Format/language validation failed, retrying...")
 
         if format_valid:
             prompt_counter += 1
@@ -717,6 +734,7 @@ def main(args):
     print(f"  Total generated: {log['total_generated']}/{log['total_attempted']}")
     print(f"  Skipped: {log['skipped']}")
     print(f"  Format validation failures: {log['format_validation_failures']}")
+    print(f"  Language filter failures:   {log['language_filter_failures']}")
 
     print(f"\nDomain Coverage:")
     print(f"  Domains sampled: {', '.join(batch.domains_sampled)}")
@@ -762,6 +780,7 @@ def main(args):
             "prompt_gen/skipped": log["skipped"],
             "prompt_gen/format_validation_failures": log["format_validation_failures"],
             "prompt_gen/success_rate": log["total_generated"] / max(log["total_attempted"], 1),
+            "prompt_gen/language_filter_failures": log["language_filter_failures"],
             "prompt_gen/avg_criteria_per_prompt": avg_criteria,
             "prompt_gen/avg_guidance_per_prompt": avg_guidance,
             "prompt_gen/unique_domains": len(batch.domains_sampled),
