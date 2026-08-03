@@ -62,9 +62,23 @@ from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
 # Concurrent Claude calls — keep below ~50 RPM rate limit.
 # Raise via CREATIVE_SCORER_MAX_WORKERS if your API tier allows more.
 _MAX_WORKERS = int(os.environ.get("CREATIVE_SCORER_MAX_WORKERS", "4"))
-# When calculating Normalized Rank Score we should set a min score.
-# otherwise bad examples could leak in to higher ranks if all of the samples are bad.
-_MIN_SCORE = 0.3
+
+# Two independent, configurable gates that skip ranking a group instead of
+# ranking noise. Both assign a *uniform* reward across the group — zero GRPO
+# advantage either way — so their job is bookkeeping + skipping noise-ranking,
+# not punishment:
+#   all_failed   — every scoreable sample in the group has failure_reason !=
+#                  "ok" (nothing to rank at all) → uniform reward 0.0.
+#   low_quality  — group scored fine, but its best raw score (1-10 scale) is
+#                  still at or below _LOW_QUALITY_THRESHOLD → ranking would
+#                  just be ranking indistinguishable garbage → uniform reward
+#                  0.5
+#                  (treated like the G_eff==1 neutral case).
+# The old `_MIN_SCORE = 0.3` compared against a 1-10 scale — i.e. it could
+# only ever fire when every sample was already a hard failure (raw_score
+# exactly 0.0), so it was accidentally doing all_failed's job while being
+# undocumented as a "low quality" gate that never actually fired.
+_LOW_QUALITY_THRESHOLD = float(os.environ.get("CREATIVE_LOW_QUALITY_THRESHOLD", "2.0"))
 # ---------------------------------------------------------------------------
 # Per-rollout JSONL logger
 # ---------------------------------------------------------------------------
@@ -232,6 +246,10 @@ def _assign_normalised_rank_rewards(
         R_i = (G_eff - rank_i) / (G_eff - 1)    rank_i starts at 1 (best)
 
     G_eff == 1 → {idx: 0.5}  (neutral, no signal, avoids division by zero).
+
+    Callers are expected to have already gated out all_failed/low_quality
+    groups (see _LOW_QUALITY_THRESHOLD above) before calling this — it
+    always ranks whatever it's given.
     """
     G_eff = len(eval_scores)
 
@@ -250,12 +268,6 @@ def _assign_normalised_rank_rewards(
         key=lambda x: x[1],
         reverse=True,
     )
-
-    if max(eval_scores.values()) < _MIN_SCORE:
-        # I have noticed for scores that are really low (
-        # where all of them are 0.1 then random example would get high reward)
-        # we are introducing min_score. We should remove this sample set.
-        return {idx: 0.0 for idx in eval_scores}
 
     # Assign normalised rank — rank starts at 1
     for rank, (sample_idx, _score) in enumerate(sorted_samples, start=1):
@@ -360,7 +372,8 @@ def compute_score(
     # Step 3 — per-group normalised rank rewards                          #
     # ------------------------------------------------------------------ #
     rewards: List[Dict[str, float]] = [{} for _ in range(n_samples)]
-    n_rejected_groups: int = 0
+    n_all_failed_groups: int = 0
+    n_low_quality_groups: int = 0
 
     for group in groups.values():
         # G_eff = actual number of rollouts received for this prompt
@@ -369,13 +382,23 @@ def compute_score(
             for idx, _ in group["samples"]
         }
 
-        if eval_scores_group and max(eval_scores_group.values()) < _MIN_SCORE:
-            n_rejected_groups += 1
-
         # Exclude language-filtered samples from ranking so they don't distort
         # the rank distribution for valid responses in the same group.
         scoreable = {idx: s for idx, s in eval_scores_group.items() if idx not in language_filtered}
-        rank_rewards = _assign_normalised_rank_rewards(scoreable)
+
+        all_failed = bool(scoreable) and all(failure_reasons[idx] != "ok" for idx in scoreable)
+        low_quality = (
+            bool(scoreable) and not all_failed and max(scoreable.values()) <= _LOW_QUALITY_THRESHOLD
+        )
+
+        if all_failed:
+            n_all_failed_groups += 1
+            rank_rewards = {idx: 0.0 for idx in scoreable}
+        elif low_quality:
+            n_low_quality_groups += 1
+            rank_rewards = {idx: 0.5 for idx in scoreable}
+        else:
+            rank_rewards = _assign_normalised_rank_rewards(scoreable)
 
         for idx, _ in group["samples"]:
             if idx in language_filtered:
@@ -405,8 +428,6 @@ def compute_score(
     try:
         wb = _get_wandb()
         if wb is not None:
-            n_below = sum(1 for s in raw_scores if s <= _MIN_SCORE)
-
             domain_raw: dict = defaultdict(list)
             for group in groups.values():
                 wp = group["wp"]
@@ -417,12 +438,12 @@ def compute_score(
             log_dict = {
                 "solver/mean_rank_reward":    mean(overall_values),
                 "solver/mean_raw_score":      mean(raw_scores) if raw_scores else 0.0,
-                "solver/num_below_min_score": n_below,
-                "solver/pct_below_min_score": n_below / n_samples if n_samples else 0.0,
                 "solver/num_groups":          n_groups,
                 "solver/num_samples":         n_samples,
-                "solver/num_rejected_groups":    n_rejected_groups,
-                "solver/pct_rejected_groups":    n_rejected_groups / n_groups if n_groups else 0.0,
+                "solver/num_all_failed_groups":  n_all_failed_groups,
+                "solver/pct_all_failed_groups":  n_all_failed_groups / n_groups if n_groups else 0.0,
+                "solver/num_low_quality_groups": n_low_quality_groups,
+                "solver/pct_low_quality_groups": n_low_quality_groups / n_groups if n_groups else 0.0,
                 "solver/num_language_filtered":  len(language_filtered),
                 "solver/pct_language_filtered":  len(language_filtered) / n_samples if n_samples else 0.0,
             }
