@@ -69,7 +69,7 @@ mkdir -p \
 
 You'll need to add a few API keys to run the experiments:
 
-* In `tokens.json`, add your API keys for **Hugging Face** and **WandB** (for logging).
+* In `.env`, add your API keys for **Hugging Face** (`HF_TOKEN`) and **WandB** (`WANDB_API_KEY`, for logging).
 * In `evaluation/results_recheck.py`, add your **OpenAI GPT** API key for evaluation.
 
 ### 3. Run the Experiments!

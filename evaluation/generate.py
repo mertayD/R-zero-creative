@@ -20,8 +20,6 @@ def main(args):
         raise RuntimeError("STORAGE_PATH is not set")
     print("STORAGE_PATH")
     print(STORAGE_PATH)
-    with open('tokens.json','r') as f: 
-        tokens = json.load(f)
     print(args.model, args.dataset)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = vllm.LLM(

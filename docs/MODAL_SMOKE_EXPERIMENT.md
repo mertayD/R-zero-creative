@@ -15,10 +15,9 @@ This document describes the **R-Zero end-to-end smoke run** on **Modal**: how to
 ## Prerequisites
 
 1. **Modal CLI** logged in; workspace/profile for this project (e.g. `MODAL_PROFILE=columbia-daplab` in [`.env`](../.env)).
-2. **`.env`** (gitignored): `APP_NAME`, `VOLUME_NAME`, `MODAL_FULL_GPU`, `REMOTE_REPO_PATH`, `REMOTE_STORAGE_PATH`, **`HUGGINGFACENAME`** (HF username/org for dataset repos — **required** for solver upload + `data.train_files`), timeouts. [`modal_run.py`](../modal_run.py) loads it with `python-dotenv` **locally**.
-3. **`tokens.json`** (local, gitignored): `huggingface` and `wandb` keys. Read **only when `modal.is_local()`**; the container gets **`HF_TOKEN`** / **`WANDB_API_KEY`** from the Modal secret.
-4. **Modal secret / env:** At runtime the container needs **`HUGGINGFACENAME`**, **`STORAGE_PATH`**, and HF/W&B tokens. `modal_run.py` builds `modal.Secret.from_dict` from local `tokens.json` + env when you run from your machine.
-5. **Volume:** `modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)` — artifacts under **`REMOTE_STORAGE_PATH`** (default **`/storage`**).
+2. **`.env`** (gitignored): `APP_NAME`, `VOLUME_NAME`, `MODAL_FULL_GPU`, `REMOTE_REPO_PATH`, `REMOTE_STORAGE_PATH`, **`HUGGINGFACENAME`** (HF username/org for dataset repos — **required** for solver upload + `data.train_files`), timeouts, and tokens — **`HF_TOKEN`**, **`WANDB_API_KEY`**, **`PERPLEXITY_API_KEY`** (WritingBench judge). [`modal_run.py`](../modal_run.py) loads it with `python-dotenv` **locally**; `.env` is excluded from the container image, so the container gets these same names from the Modal secret instead.
+3. **Modal secret / env:** At runtime the container needs **`HUGGINGFACENAME`**, **`STORAGE_PATH`**, and the HF/W&B/Perplexity tokens. `modal_run.py` builds `modal.Secret.from_dict` from local `.env` when you run from your machine.
+4. **Volume:** `modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)` — artifacts under **`REMOTE_STORAGE_PATH`** (default **`/storage`**).
 
 ---
 
@@ -222,7 +221,7 @@ Modal forwards these as **`SMOKE_*`** env vars from [`modal_run.py`](../modal_ru
 
 ## Security
 
-Do **not** commit **`.env`**, **`tokens.json`**, or API keys. Rotate any key that was exposed.
+Do **not** commit **`.env`** or API keys. Rotate any key that was exposed.
 
 ---
 

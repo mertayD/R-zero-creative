@@ -2,15 +2,16 @@ import json
 import huggingface_hub
 from datasets import Dataset, DatasetDict
 from huggingface_hub import login
+from dotenv import load_dotenv
 import argparse
 import json
 import os
+
+load_dotenv()
 STORAGE_PATH = os.getenv("STORAGE_PATH")
 HUGGINGFACENAME = os.getenv("HUGGINGFACENAME")
 print(STORAGE_PATH)
-with open('tokens.json', 'r') as f:
-    token = json.load(f)['huggingface']
-login(token=token)
+login(token=os.getenv("HF_TOKEN"))
 parser = argparse.ArgumentParser()
 parser.add_argument("--repo_name", type=str, default="")
 parser.add_argument("--max_score", type=float, default=0.7)

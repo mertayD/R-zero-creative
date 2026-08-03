@@ -10,8 +10,9 @@ because we use:
     [X-PLUG/WritingBench](https://github.com/X-PLUG/WritingBench), Apache-2.0)
   * the **official generation params** — `top_p=0.8, top_k=20, temperature=0.7,
     max_tokens=16000` — per the WritingBench README
-  * the **official judge** — Claude-Sonnet-4-5 via Anthropic's Messages API,
-    matching the leaderboard switch on 2025-11-27
+  * the **official judge** — Claude-Sonnet-4-5, called via the Perplexity
+    Gateway's Anthropic-Messages-compatible endpoint, matching the leaderboard
+    switch on 2025-11-27
 
 The development-time judge for R-Zero training (a base-model judge) is **not**
 implemented here — that lives outside the eval path on purpose.
@@ -36,7 +37,7 @@ evaluation/writing_bench/
 └── evaluator/
     ├── __init__.py
     ├── critic.py                   vendored verbatim — local Qwen-7B critic path
-    └── llm.py                      patched: Anthropic Messages API + ANTHROPIC_API_KEY
+    └── llm.py                      patched: Perplexity Gateway (Anthropic Messages) + PERPLEXITY_API_KEY
 ```
 
 ## Three subset choices
@@ -58,8 +59,8 @@ by `fetch_data.sh`.
 # first invocation if benchmark_query/ is missing.
 bash evaluation/writing_bench/fetch_data.sh
 
-# Required env: Anthropic key for the Claude-Sonnet-4-5 judge.
-export ANTHROPIC_API_KEY=sk-ant-...
+# Required env: Perplexity Gateway key for the Claude-Sonnet-4-5 judge.
+export PERPLEXITY_API_KEY=pplx-...
 ```
 
 ## Run the baseline

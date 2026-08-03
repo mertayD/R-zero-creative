@@ -13,8 +13,8 @@ Usage (smoke test — end-to-end validation):
     # Equivalent wrapper from repo root:
     bash scripts/modal_run_smoke_detach.sh
 
-Tokens are read from tokens.json (huggingface + wandb) and infrastructure
-config (volume name, GPU type, etc.) is read from .env.
+Tokens (HF_TOKEN, WANDB_API_KEY, PERPLEXITY_API_KEY) and infrastructure config
+(volume name, GPU type, etc.) are all read from .env.
 """
 
 import json
@@ -25,22 +25,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Tokens — read locally from tokens.json; in the container they come from
-# the Modal secret injected as environment variables (HF_TOKEN, WANDB_API_KEY,
-# ANTHROPIC_API_KEY). Add `"anthropic": "sk-ant-..."` to tokens.json so the
-# WritingBench eval Function below can call Claude-Sonnet-4-5 as the judge.
+# Tokens — read from .env locally; in the container they come from the Modal
+# secret injected as environment variables (same names, see runtime_secret
+# below). Add PERPLEXITY_API_KEY to .env so the WritingBench eval Function
+# below can call Claude-Sonnet-4-5 (via the Perplexity Gateway) as the judge.
 # ---------------------------------------------------------------------------
-if modal.is_local():
-    with open("tokens.json") as _f:
-        _t = json.load(_f)
-    HF_TOKEN          = _t.get("huggingface", "")
-    WANDB_API_KEY     = _t.get("wandb", "")
-    ANTHROPIC_API_KEY = _t.get("anthropic", "")
-else:
-    # In container: values are already in env via the secret
-    HF_TOKEN          = os.environ.get("HF_TOKEN", "")
-    WANDB_API_KEY     = os.environ.get("WANDB_API_KEY", "")
-    ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+HF_TOKEN           = os.environ.get("HF_TOKEN", "")
+WANDB_API_KEY      = os.environ.get("WANDB_API_KEY", "")
+PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 
 # ---------------------------------------------------------------------------
 # Infrastructure config from .env
@@ -145,13 +137,14 @@ image = (
 # Runtime secrets – injected as env vars inside the container
 # ---------------------------------------------------------------------------
 runtime_secret = modal.Secret.from_dict({
-    "WANDB_API_KEY":     WANDB_API_KEY,
-    "HF_TOKEN":          HF_TOKEN,          # also available via tokens.json mount
-    "HUGGINGFACENAME":   HUGGINGFACENAME,
-    "STORAGE_PATH":      REMOTE_STORAGE_PATH,
-    # Used only by eval_writing_bench (Claude-Sonnet-4-5 judge). Empty in
-    # tokens.json is OK — only fails when eval is actually invoked.
-    "ANTHROPIC_API_KEY": ANTHROPIC_API_KEY,
+    "WANDB_API_KEY":      WANDB_API_KEY,
+    "HF_TOKEN":           HF_TOKEN,          # also available via tokens.json mount
+    "HUGGINGFACENAME":    HUGGINGFACENAME,
+    "STORAGE_PATH":       REMOTE_STORAGE_PATH,
+    # Used only by eval_writing_bench (Claude-Sonnet-4-5 judge, via the
+    # Perplexity Gateway). Empty in tokens.json is OK — only fails when eval
+    # is actually invoked.
+    "PERPLEXITY_API_KEY": PERPLEXITY_API_KEY,
 })
 
 # ---------------------------------------------------------------------------
@@ -357,9 +350,9 @@ def eval_writing_bench(
     storage = os.environ["STORAGE_PATH"]
 
     # Sanity-check the judge key surfaces a clear error before we burn GPU time.
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not os.environ.get("PERPLEXITY_API_KEY"):
         raise RuntimeError(
-            "ANTHROPIC_API_KEY is empty. Add an 'anthropic' entry to "
+            "PERPLEXITY_API_KEY is empty. Add a 'perplexity' entry to "
             "tokens.json locally and re-run; modal_run.py will inject it "
             "via the runtime secret."
         )
@@ -1221,9 +1214,9 @@ def score_responses(
     wb_dir = f"{repo}/evaluation/writing_bench"
     sys.path.insert(0, wb_dir)
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not os.environ.get("PERPLEXITY_API_KEY"):
         raise RuntimeError(
-            "ANTHROPIC_API_KEY is empty. Add 'anthropic' to tokens.json and re-run; "
+            "PERPLEXITY_API_KEY is empty. Add 'perplexity' to tokens.json and re-run; "
             "modal_run.py will inject it via the runtime secret."
         )
 

@@ -4,9 +4,9 @@
 # Stages:
 #   1. Generate responses with vLLM using the official leaderboard sampling
 #      params (top_p=0.8, top_k=20, temperature=0.7, max_tokens=16000).
-#   2. Score each (response, criterion) pair with Claude-Sonnet-4-5 — the
-#      judge currently used by the WritingBench leaderboard. Set
-#      ANTHROPIC_API_KEY in your environment.
+#   2. Score each (response, criterion) pair with Claude-Sonnet-4-5 via the
+#      Perplexity Gateway — the judge currently used by the WritingBench
+#      leaderboard. Set PERPLEXITY_API_KEY in your environment.
 #   3. Aggregate scores into an .xlsx report.
 #
 # Usage:
@@ -21,7 +21,7 @@
 #                        (e.g. ~/wb-runs or a scratch disk) to avoid bloat.
 #
 # Required env:
-#   ANTHROPIC_API_KEY  : Anthropic key for the Claude-Sonnet-4-5 judge.
+#   PERPLEXITY_API_KEY : Perplexity Gateway key for the Claude-Sonnet-4-5 judge.
 #
 # Examples:
 #   bash scripts/eval_writing_bench.sh Qwen/Qwen3-4B-Base smoke50 ~/wb-runs
@@ -45,9 +45,15 @@ if [[ -z "${STORAGE_PATH}" ]]; then
 fi
 mkdir -p "${STORAGE_PATH}"
 
-: "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY must be set for the Claude-Sonnet-4-5 judge}"
-
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -f "${REPO_ROOT}/.env" ]]; then
+    set -a
+    source "${REPO_ROOT}/.env"
+    set +a
+fi
+
+: "${PERPLEXITY_API_KEY:?PERPLEXITY_API_KEY must be set (export it, or add it to .env) for the Claude-Sonnet-4-5 judge}"
+
 WB_DIR="${REPO_ROOT}/evaluation/writing_bench"
 BENCH_ALL="${WB_DIR}/benchmark_query/benchmark_all.jsonl"
 REQUIREMENT_DIR="${WB_DIR}/benchmark_query/requirement"
@@ -89,7 +95,7 @@ python3 "${WB_DIR}/generate_responses_vllm.py" \
     --query_file "${QUERY_FILE}" \
     --output_file "${RESP_FILE}"
 
-echo "==> [2/3] Scoring with Claude-Sonnet-4-5"
+echo "==> [2/3] Scoring with Claude"
 # evaluate_benchmark.py imports `prompt` and `evaluator` as top-level packages,
 # so we cd into WB_DIR for the call.
 (
