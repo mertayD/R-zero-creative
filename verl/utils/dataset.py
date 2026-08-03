@@ -142,6 +142,8 @@ class RLHFDataset(Dataset):
             n = min(max_samples, len(self.dataset))
             self.dataset = self.dataset.select(range(n))
 
+        self._logged_rendered_prompt = False
+
     def _build_messages(self, example: Dict[str, Any]) -> List[Dict[str, Any]]:
         prompt_str: str = example[self.prompt_key]
         if self.format_prompt and "questioner_format_with_persona" in self.format_prompt:
@@ -267,6 +269,10 @@ class RLHFDataset(Dataset):
             model_inputs = self.tokenizer([prompt], add_special_tokens=False, return_tensors="pt")
             input_ids = model_inputs.pop("input_ids")[0]
             attention_mask = model_inputs.pop("attention_mask")[0]
+
+        if index == 0 and not self._logged_rendered_prompt:
+            self._logged_rendered_prompt = True
+            print(f"[RENDERED_PROMPT] {prompt!r}", flush=True)
 
         if self.processor is not None and self.processor.image_processor.__class__.__name__ == "Qwen2VLImageProcessor":
             # qwen2vl mrope
