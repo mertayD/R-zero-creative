@@ -1492,8 +1492,14 @@ def train_creative_challenger(
     )
 
     volume.commit()
-    c_merge = max_steps - 1
-    challenger_ckpt = f"{storage}/models/{abbr}_challenger/global_step_{c_merge}/actor/huggingface"
+    # The script writes its actual merged checkpoint path here — read it back
+    # instead of reconstructing SAVE_NAME/global_step independently, which is
+    # what caused the historical path mismatch between this function and the
+    # script's own naming (SAVE_NAME could carry a "_v1"/timestamp suffix the
+    # old reconstruction here didn't account for).
+    last_ckpt_file = f"{storage}/models/{abbr}_challenger_last_ckpt.txt"
+    with open(last_ckpt_file) as f:
+        challenger_ckpt = f.read().strip()
     print(f"=== Creative challenger training complete — checkpoint: {challenger_ckpt} ===")
     return challenger_ckpt
 
@@ -1669,8 +1675,11 @@ def train_creative_solver(
     )
 
     volume.commit()
-    s_merge = max_steps - 1
-    solver_ckpt = f"{storage}/models/{abbr}_solver/global_step_{s_merge}/actor/huggingface"
+    # See the matching comment in train_creative_challenger — read the merged
+    # path the script actually produced instead of reconstructing it here.
+    last_ckpt_file = f"{storage}/models/{abbr}_solver_last_ckpt.txt"
+    with open(last_ckpt_file) as f:
+        solver_ckpt = f.read().strip()
     print(f"=== Creative solver training complete — checkpoint: {solver_ckpt} ===")
     return solver_ckpt
 

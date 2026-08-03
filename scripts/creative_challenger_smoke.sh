@@ -16,10 +16,18 @@
 #   → R-Zero uncertainty reward returned by creative_writing_caller.py.
 #
 # Scale controlled by env (set by train_creative_challenger in modal_run.py):
-#   SMOKE_CHALLENGER_MAX_STEPS  (default 4)
+#   CHALLENGER_MAX_STEPS    (default 4)
+#   CHALLENGER_ROLLOUT_N    (default 4)
+#   RUN_ID                  (unset for standalone calls)
+#
+# NOTE: these names must match modal_run.py's env dict exactly — this script
+# used to read SMOKE_-prefixed names that modal_run.py never set, so real
+# runs silently trained on defaults regardless of --max-steps/--rollout-n.
 # =============================================================================
 
 set -euo pipefail
+
+: "${STORAGE_PATH:?STORAGE_PATH not set}"
 
 export WANDB_MODE="${WANDB_MODE:-disabled}"
 rm -rf /tmp/torchinductor_root /tmp/tinductor_* 2>/dev/null || true
@@ -31,22 +39,21 @@ num_train="${4:-8}"
 num_val="${5:-2}"
 seed="${6:-42}"
 
-C_STEPS="${SMOKE_CHALLENGER_MAX_STEPS:-4}"
-C_ROLLOUT_N="${SMOKE_CHALLENGER_ROLLOUT_N:-4}"
+C_STEPS="${CHALLENGER_MAX_STEPS:-4}"
+C_ROLLOUT_N="${CHALLENGER_ROLLOUT_N:-4}"
 C_MERGE=$((C_STEPS - 1))
 
 # ---------------------------------------------------------------------------
 # Run-unique checkpoint name
 # ---------------------------------------------------------------------------
-# When called standalone, SMOKE_RUN_ID is not set so we generate a timestamp
-# here and append it to SAVE_NAME — repeated calls never overwrite each other.
+# When called standalone, RUN_ID is not set so we generate a timestamp here
+# and append it to SAVE_NAME — repeated calls never overwrite each other.
 #
-# When called from creative_coevolve_smoke.sh, that script exports SMOKE_RUN_ID
-# and has already embedded the timestamp in Model_abbr (via the iter_abbr it
-# passes as $3), so we use SAVE_NAME as-is to stay consistent with the path
-# that creative_coevolve_smoke.sh expects.
+# When called from modal_run.py's train_creative_coevolve orchestrator, that
+# function passes run_id (embedded in Model_abbr via the iter_abbr it builds),
+# so we use SAVE_NAME as-is to stay consistent with the path it expects.
 # ---------------------------------------------------------------------------
-if [ -z "${SMOKE_RUN_ID:-}" ]; then
+if [ -z "${RUN_ID:-}" ]; then
     _RUN_TS=$(date +%Y%m%d_%H%M%S)
     SAVE_NAME="${Model_abbr}_challenger_v1_${_RUN_TS}"
 else
@@ -83,7 +90,7 @@ from question_generate.creative_writing_prompts import WRITING_DOMAINS
 
 _seed            = int("$seed")
 _iteration       = int(os.environ.get("COEVOLVE_ITERATION", "1"))
-_run_id          = os.environ.get("SMOKE_RUN_ID", "standalone")
+_run_id          = os.environ.get("RUN_ID", "standalone")
 _challenger_init = "$challenger_model"
 _solver_oracle   = "$solver_model"
 
@@ -205,6 +212,14 @@ python scripts/model_merger.py \
     --local_dir "${STORAGE_PATH}/models/${SAVE_NAME}/global_step_${C_MERGE}/actor"
 
 echo "Checkpoint merged."
+
+# Write the merged path to a fixed, abbr-keyed location so modal_run.py can
+# read it back instead of reconstructing SAVE_NAME/global_step independently
+# (the source of the T1.3 path-mismatch bug).
+CHALLENGER_CKPT_PATH="${STORAGE_PATH}/models/${SAVE_NAME}/global_step_${C_MERGE}/actor/huggingface"
+LAST_CKPT_FILE="${STORAGE_PATH}/models/${Model_abbr}_challenger_last_ckpt.txt"
+echo "$CHALLENGER_CKPT_PATH" > "$LAST_CKPT_FILE"
+echo "Checkpoint path recorded -> $LAST_CKPT_FILE"
 
 # ---------------------------------------------------------------------------
 # Step 4: Upload per-rollout reward log to W&B as a Table

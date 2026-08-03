@@ -19,14 +19,21 @@
 #
 # Reward (live): solver generates G responses per prompt → BatchEvalAgent scores
 #   each → normalised rank reward R_i = (G - rank_i) / (G - 1).
-#   G controlled by worker.rollout.n; defaults to SMOKE_SOLVER_ROLLOUT_N (4).
+#   G controlled by worker.rollout.n; defaults to SOLVER_ROLLOUT_N (4).
 #
 # Scale controlled by env (set by train_creative_solver in modal_run.py):
-#   SMOKE_SOLVER_MAX_STEPS   (default 4)
-#   SMOKE_SOLVER_ROLLOUT_N   (default 4)  — samples per prompt (G)
+#   SOLVER_MAX_STEPS   (default 4)
+#   SOLVER_ROLLOUT_N   (default 4)  — samples per prompt (G)
+#   RUN_ID             (unset for standalone calls)
+#
+# NOTE: these names must match modal_run.py's env dict exactly — this script
+# used to read SMOKE_-prefixed names that modal_run.py never set, so real
+# runs silently trained on defaults regardless of --solver-max-steps/--solver-rollout-n.
 # =============================================================================
 
 set -euo pipefail
+
+: "${STORAGE_PATH:?STORAGE_PATH not set}"
 
 export WANDB_MODE="${WANDB_MODE:-disabled}"
 rm -rf /tmp/torchinductor_root /tmp/tinductor_* 2>/dev/null || true
@@ -38,18 +45,19 @@ num_train="${4:-8}"
 num_val="${5:-2}"
 seed="${6:-42}"
 
-S_STEPS="${SMOKE_SOLVER_MAX_STEPS:-4}"
+S_STEPS="${SOLVER_MAX_STEPS:-4}"
 S_MERGE=$((S_STEPS - 1))
-ROLLOUT_N="${SMOKE_SOLVER_ROLLOUT_N:-4}"
+ROLLOUT_N="${SOLVER_ROLLOUT_N:-4}"
 
 # ---------------------------------------------------------------------------
 # Run-unique checkpoint name
 # ---------------------------------------------------------------------------
 # Standalone call: append a fresh timestamp so repeated runs don't collide.
-# Called from creative_coevolve_smoke.sh: SMOKE_RUN_ID is exported and
-# Model_abbr already contains the run timestamp, so no second stamp is added.
+# Called from modal_run.py's train_creative_coevolve orchestrator: RUN_ID is
+# exported and Model_abbr already contains the run timestamp, so no second
+# stamp is added.
 # ---------------------------------------------------------------------------
-if [ -z "${SMOKE_RUN_ID:-}" ]; then
+if [ -z "${RUN_ID:-}" ]; then
     _RUN_TS=$(date +%Y%m%d_%H%M%S)
     SAVE_NAME="${Model_abbr}_solver_v1_${_RUN_TS}"
 else
@@ -125,7 +133,7 @@ import pandas as pd
 from question_generate.one_shot_creative_question_generate import WritingPrompt
 
 _iteration          = int(os.environ.get("COEVOLVE_ITERATION", "1"))
-_run_id             = os.environ.get("SMOKE_RUN_ID", "standalone")
+_run_id             = os.environ.get("RUN_ID", "standalone")
 _challenger_ckpt    = "$challenger_checkpoint"
 
 prompts_json = "${PROMPTS_JSON}"
@@ -256,6 +264,14 @@ python scripts/model_merger.py \
     --local_dir "${STORAGE_PATH}/models/${SAVE_NAME}/global_step_${S_MERGE}/actor"
 
 echo "Checkpoint merged."
+
+# Write the merged path to a fixed, abbr-keyed location so modal_run.py can
+# read it back instead of reconstructing SAVE_NAME/global_step independently
+# (the source of the T1.3 path-mismatch bug).
+SOLVER_CKPT_PATH="${STORAGE_PATH}/models/${SAVE_NAME}/global_step_${S_MERGE}/actor/huggingface"
+LAST_CKPT_FILE="${STORAGE_PATH}/models/${Model_abbr}_solver_last_ckpt.txt"
+echo "$SOLVER_CKPT_PATH" > "$LAST_CKPT_FILE"
+echo "Checkpoint path recorded -> $LAST_CKPT_FILE"
 
 # ---------------------------------------------------------------------------
 # Step 4: Upload per-rollout reward log to W&B as a Table
