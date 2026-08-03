@@ -47,6 +47,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from statistics import mean
 from typing import Dict, List, Tuple
 
+from scipy.stats import rankdata
+
 # Ensure repo root and writing_bench dir are importable
 _REPO   = os.environ.get("REMOTE_REPO_PATH", "/root/R-Zero")
 _WB_DIR = os.path.join(_REPO, "evaluation", "writing_bench")
@@ -245,7 +247,14 @@ def _assign_normalised_rank_rewards(
 
         R_i = (G_eff - rank_i) / (G_eff - 1)    rank_i starts at 1 (best)
 
+    Ties get the average of the ranks they span (scipy's "average" method),
+    so equal scores get equal rewards and contribute zero GRPO advantage
+    between themselves — with plain ordinal ranks, tie-breaking (typically
+    by original order) injects pure noise, and most G>=2 groups have at
+    least one tie on a 1-10 judge scale.
+
     G_eff == 1 → {idx: 0.5}  (neutral, no signal, avoids division by zero).
+    All-equal group → every sample gets the average rank → all 0.5.
 
     Callers are expected to have already gated out all_failed/low_quality
     groups (see _LOW_QUALITY_THRESHOLD above) before calling this — it
@@ -260,19 +269,15 @@ def _assign_normalised_rank_rewards(
         idx = next(iter(eval_scores))
         return {idx: 0.5}
 
+    sample_idxs = list(eval_scores.keys())
+    scores = [eval_scores[idx] for idx in sample_idxs]
+    # Negate so the highest score gets rank 1 (rankdata ranks ascending).
+    ranks = rankdata([-s for s in scores], method="average")
+
     rewards: Dict[int, float] = {}
-
-    # Sort by score descending (best first)
-    sorted_samples: List[Tuple[int, float]] = sorted(
-        eval_scores.items(),
-        key=lambda x: x[1],
-        reverse=True,
-    )
-
-    # Assign normalised rank — rank starts at 1
-    for rank, (sample_idx, _score) in enumerate(sorted_samples, start=1):
+    for sample_idx, rank in zip(sample_idxs, ranks):
         normalized_reward = (G_eff - rank) / (G_eff - 1)
-        rewards[sample_idx] = round(normalized_reward, 4)
+        rewards[sample_idx] = round(float(normalized_reward), 4)
     return rewards
 
 
