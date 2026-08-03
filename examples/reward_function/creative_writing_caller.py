@@ -9,12 +9,14 @@ Each predict string must contain a <output>...</output> JSON block with fields:
 Reward pipeline:
   1. Parse all <output> JSONs (format validation)
   2. Batch-query vLLM solver (single POST with list of prompts)
-  3. Score solver responses in parallel via BatchEvalAgent (Claude API)
+  3. Strip <think> traces; score only the final answers via BatchEvalAgent (Claude API)
   4. Compute R-Zero uncertainty via compute_writing_reward
 
-Sampling parameters match solver_sampling.py (WritingBench defaults):
-  temperature=0.7, top_p=0.8, top_k=20
-  max_tokens defaults to 2048 for training speed (vs 16000 in full eval);
+Solver generation uses Qwen3 thinking-mode best practices:
+  temperature=0.6, top_p=0.95, top_k=20, min_p=0 (no greedy decoding).
+  Each query is wrapped in the solver chat template with enable_thinking=True
+  before being sent to /v1/completions.
+  max_tokens defaults to 32768 (thinking traces need a large budget);
   override via CREATIVE_SOLVER_MAX_TOKENS env var.
 
 Interface matches caller_penalty.py exactly:
@@ -42,19 +44,23 @@ os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 
 from question_generate.one_shot_creative_question_generate import FormatValidator, WritingPrompt
 from evaluation.shared.rewards import compute_writing_reward
+from evaluation.shared.utilities import split_thinking
 
 # Solver server config (GPU 7, started by creative_challenger_smoke.sh)
 _SOLVER_PORT       = int(os.environ.get("CREATIVE_SOLVER_PORT", "5000"))
-_SOLVER_MAX_TOKENS = int(os.environ.get("CREATIVE_SOLVER_MAX_TOKENS", "2048"))
+_SOLVER_MAX_TOKENS = int(os.environ.get("CREATIVE_SOLVER_MAX_TOKENS", "32768"))
 
-# WritingBench sampling defaults (matches solver_sampling.py)
-_TEMPERATURE = 0.7
-_TOP_P       = 0.8
+# Qwen3 thinking-mode sampling best practices (generation_config.json defaults).
+# DO NOT use greedy decoding — it causes repetition/degradation in thinking mode.
+_TEMPERATURE = 0.6
+_TOP_P       = 0.95
 _TOP_K       = 20
+_MIN_P       = 0.0
 
 # Lazy singletons
 _agent = None
 _solver_model_id = None
+_solver_tokenizer = None
 _wandb_run = None
 
 
@@ -85,9 +91,11 @@ def _get_wandb():
 #   step                  — monotonic call counter
 #   rollout_idx           — position in the batch
 #   format_valid          — 1 if <output>JSON</output> parsed, 0 otherwise
+#   challenger_thinking   — full <think> reasoning trace the challenger produced (empty if none)
 #   generated_query       — first 300 chars of the writing prompt the challenger wrote
 #   generated_criteria_n  — number of criteria in the generated prompt
-#   solver_response       — first 300 chars of the solver's answer (empty if format failed)
+#   solver_response       — first 300 chars of the solver's final answer (thinking stripped)
+#   solver_thinking       — full <think> reasoning trace (empty if none / direct answer)
 #   overall               — R-Zero uncertainty reward
 #   format                — 1.0 = valid XML+JSON, 0.0 = parse failure
 #   accuracy              — avg criterion score / 10
@@ -100,7 +108,9 @@ _challenger_step: int = 0
 
 def _log_challenger_rollouts(
     parsed: List[Optional[WritingPrompt]],
+    challenger_thinking: List[str],
     solver_texts: Dict[int, str],
+    solver_thinking: Dict[int, str],
     scores: List[Dict[str, float]],
 ) -> None:
     global _challenger_step
@@ -118,9 +128,11 @@ def _log_challenger_rollouts(
             "step":                 _challenger_step,
             "rollout_idx":          idx,
             "format_valid":         1 if wp is not None else 0,
+            "challenger_thinking":  challenger_thinking[idx],
             "generated_query":      wp.query[:300] if wp is not None else "",
             "generated_criteria_n": len(wp.criteria) if wp is not None else 0,
             "solver_response":      solver_texts.get(idx, "")[:300],
+            "solver_thinking":      solver_thinking.get(idx, ""),
             "overall":              round(scores[idx].get("overall", 0.0), 4),
             "format":               round(scores[idx].get("format",  0.0), 4),
             "accuracy":             round(scores[idx].get("accuracy", 0.0), 4),
@@ -154,17 +166,44 @@ def _get_solver_model_id() -> str:
     return _solver_model_id
 
 
+def _get_solver_tokenizer():
+    """Load the solver's HF tokenizer (cached after first call)."""
+    global _solver_tokenizer
+    if _solver_tokenizer is None:
+        from transformers import AutoTokenizer
+        _solver_tokenizer = AutoTokenizer.from_pretrained(_get_solver_model_id())
+    return _solver_tokenizer
+
+
+def _build_thinking_prompt(query: str) -> str:
+    """Wrap a query in the solver chat template with thinking mode enabled.
+
+    Applied client-side so we can keep sending a batch of prompts to the
+    /v1/completions endpoint in a single request.
+    """
+    tokenizer = _get_solver_tokenizer()
+    messages = [{"role": "user", "content": query}]
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=True,  # True is the default value for enable_thinking
+    )
+
+
 def _query_solver_batch(queries: List[str]) -> List[str]:
     """Send all queries in a single vLLM request; return completions in order."""
+    prompts = [_build_thinking_prompt(q) for q in queries]
     resp = requests.post(
         f"http://127.0.0.1:{_SOLVER_PORT}/v1/completions",
         json={
             "model":       _get_solver_model_id(),
-            "prompt":      queries,
+            "prompt":      prompts,
             "max_tokens":  _SOLVER_MAX_TOKENS,
             "temperature": _TEMPERATURE,
             "top_p":       _TOP_P,
             "top_k":       _TOP_K,
+            "min_p":       _MIN_P,
         },
         timeout=300,
     )
@@ -210,11 +249,16 @@ def compute_score(
     agent = _get_agent()
 
     # --- Step 1: parse all predicts into WritingPrompt objects ---
-    # validate_response checks XML tags, JSON validity, and that query is a str.
-    # from_dict handles remaining field extraction with safe defaults.
+    # Challenger rollouts are thinking-mode: split off the <think>…</think>
+    # trace first (logged separately), then validate the answer. validate_response
+    # checks XML tags, JSON validity, and that query is a str; from_dict handles
+    # remaining field extraction with safe defaults.
     parsed: List[Optional[WritingPrompt]] = []
+    challenger_thinking: List[str] = []
     for predict in predicts:
-        fmt, p = FormatValidator.validate_response(predict)
+        thinking, answer = split_thinking(predict)
+        challenger_thinking.append(thinking)
+        fmt, p = FormatValidator.validate_response(answer)
         if fmt != 1:
             parsed.append(None)
             continue
@@ -230,11 +274,17 @@ def compute_score(
     valid_idx     = [i for i, wp in enumerate(parsed) if wp is not None]
     valid_queries = [parsed[i].query for i in valid_idx]
 
+    # solver_texts holds the final answers (thinking stripped) used for scoring;
+    # solver_thinking holds the reasoning traces, logged separately.
     solver_texts: Dict[int, str] = {}
+    solver_thinking: Dict[int, str] = {}
     if valid_queries:
         try:
             texts = _query_solver_batch(valid_queries)
-            solver_texts = {idx: texts[k] for k, idx in enumerate(valid_idx)}
+            for k, idx in enumerate(valid_idx):
+                thinking, answer = split_thinking(texts[k])
+                solver_texts[idx]    = answer
+                solver_thinking[idx] = thinking
         except Exception as e:
             print(f"[creative_writing_caller] batch vLLM query failed: {e}", flush=True)
 
@@ -266,7 +316,7 @@ def compute_score(
                 scores[futures[future]] = future.result()
 
     try:
-        _log_challenger_rollouts(parsed, solver_texts, scores)
+        _log_challenger_rollouts(parsed, challenger_thinking, solver_texts, solver_thinking, scores)
     except Exception as _log_err:
         print(f"[creative_writing_caller] rollout logging failed: {_log_err}", flush=True)
 

@@ -38,6 +38,7 @@ def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, proces
         max_pixels=config.max_pixels,
         filter_overlong_prompts=config.filter_overlong_prompts,
         max_samples=config.max_train_samples,
+        apply_chat_template_kwargs=config.apply_chat_template_kwargs,
     )
     # use sampler for better ckpt resume
     if config.shuffle:
@@ -75,6 +76,7 @@ def create_dataloader(config: DataConfig, tokenizer: PreTrainedTokenizer, proces
         max_pixels=config.max_pixels,
         filter_overlong_prompts=config.filter_overlong_prompts,
         max_samples=config.max_val_samples,
+        apply_chat_template_kwargs=config.apply_chat_template_kwargs,
     )
     val_dataloader = StatefulDataLoader(
         dataset=val_dataset,

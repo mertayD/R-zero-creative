@@ -44,6 +44,10 @@ class DataConfig:
     val_batch_size: int = -1
     format_prompt: Optional[str] = None
     override_chat_template: Optional[str] = None
+    # Extra kwargs forwarded to tokenizer.apply_chat_template during prompt
+    # building — e.g. {"enable_thinking": true} for Qwen3. Matches upstream
+    # veRL's data.apply_chat_template_kwargs interface.
+    apply_chat_template_kwargs: dict = field(default_factory=dict)
     shuffle: bool = True
     seed: int = 1
     max_pixels: int = 4194304

@@ -476,7 +476,7 @@ class VLLMClient:
         try:
             sampling_params = vllm.SamplingParams(
                 max_tokens=max_tokens,
-                temperature=1.0,
+                temperature=0.6,
                 top_p=0.95,
                 n=1,
                 stop_token_ids=[self.tokenizer.eos_token_id],
@@ -1402,6 +1402,7 @@ def score(
     volumes={REMOTE_STORAGE_PATH: volume},
     secrets=[runtime_secret],
     timeout=MODAL_TIMEOUT,
+    retries=2,
     env={
         "VLLM_DISABLE_COMPILE_CACHE":      "1",
         "TORCHINDUCTOR_MAX_AUTOTUNE":       "0",
@@ -1422,9 +1423,12 @@ def train_creative_challenger(
     num_train: int = 8,
     num_val: int = 2,
     seed: int = 42,
-    smoke_challenger_max_steps: int = 4,
-    smoke_challenger_rollout_n: int = 4,
-):
+    max_steps: int = 4,
+    rollout_n: int = 4,
+    run_id: str = "",
+    wandb_group: str = "",
+    coevolve_iteration: int = 1,
+) -> str:
     """
     Train the creative writing challenger with VERL GRPO.
 
@@ -1432,18 +1436,18 @@ def train_creative_challenger(
     then trains the challenger model (GPUs 0-3) using R-Zero uncertainty
     rewards from the BatchEvalAgent Claude judge.
 
-    Training data comes from DomainSampler (creative_writing_prompts.py),
-    not from pre-scored responses — the challenger learns to generate hard
-    prompts directly from domain/subdomain pairs.
-
     Args:
-        solver_model:             HF id or volume path — vLLM server for reward computation.
-        challenger_model:         HF id or volume path — model trained by VERL.
-        abbr:                     Short name for checkpoint directories.
-        num_train:                Number of training rows (domain/subdomain pairs).
-        num_val:                  Number of validation rows.
-        seed:                     Random seed for DomainSampler.
-        smoke_challenger_max_steps: Max VERL training steps.
+        solver_model:       HF id or volume path — vLLM server for reward computation.
+        challenger_model:   HF id or volume path — model trained by VERL.
+        abbr:               Short name for checkpoint directories.
+        num_train:          Training rows (domain/subdomain pairs).
+        num_val:            Validation rows.
+        seed:               Random seed for DomainSampler.
+        max_steps:          Max VERL training steps.
+        rollout_n:          GRPO rollout n (samples per training prompt).
+        run_id:             Run timestamp set by orchestrator; auto-generated if empty.
+        wandb_group:        W&B group for sub-runs; W&B disabled if empty.
+        coevolve_iteration: Current co-evolution iteration (metadata only).
     """
     import os
     import subprocess
@@ -1465,16 +1469,22 @@ def train_creative_challenger(
         "STORAGE_PATH":               storage,
         "HF_HOME":                    hf_cache,
         "HUGGINGFACE_HUB_CACHE":      hf_cache,
-        "SMOKE_CHALLENGER_MAX_STEPS":   str(smoke_challenger_max_steps),
-        "SMOKE_CHALLENGER_ROLLOUT_N":   str(smoke_challenger_rollout_n),
+        "CHALLENGER_MAX_STEPS":         str(max_steps),
+        "CHALLENGER_ROLLOUT_N":         str(rollout_n),
         "REMOTE_REPO_PATH":             repo,
+        "COEVOLVE_ITERATION":           str(coevolve_iteration),
     }
+    if run_id:
+        env["RUN_ID"] = run_id
+    if wandb_group:
+        env["WANDB_MODE"] = "online"
+        env["WANDB_RUN_GROUP"] = wandb_group
 
     print(
         f"=== Creative Challenger Training | "
         f"solver={solver_model} challenger={challenger_model} abbr={abbr} "
-        f"num_train={num_train} num_val={num_val} steps={smoke_challenger_max_steps} "
-        f"rollout_n={smoke_challenger_rollout_n} ==="
+        f"num_train={num_train} num_val={num_val} steps={max_steps} "
+        f"rollout_n={rollout_n} ==="
     )
 
     subprocess.run(
@@ -1489,7 +1499,10 @@ def train_creative_challenger(
     )
 
     volume.commit()
-    print("=== Creative challenger training complete — artefacts committed to volume ===")
+    c_merge = max_steps - 1
+    challenger_ckpt = f"{storage}/models/{abbr}_challenger/global_step_{c_merge}/actor/huggingface"
+    print(f"=== Creative challenger training complete — checkpoint: {challenger_ckpt} ===")
+    return challenger_ckpt
 
 
 @app.local_entrypoint()
@@ -1500,28 +1513,23 @@ def creative_smoke(
     num_train: int = 8,
     num_val: int = 2,
     seed: int = 42,
-    smoke_challenger_max_steps: int = 4,
-    smoke_challenger_rollout_n: int = 4,
+    max_steps: int = 4,
+    rollout_n: int = 4,
 ):
     """
-    Creative writing challenger smoke test: train challenger with VERL GRPO.
+    Creative writing challenger training: train challenger with VERL GRPO.
 
     Training data is sampled from DomainSampler (domain/subdomain pairs →
     full one-shot prompts). Reward is computed live during training:
     challenger generates a prompt → solver (vLLM, GPU 7) answers →
     BatchEvalAgent (Claude) scores → R-Zero uncertainty reward.
 
-    To validate the generation/sampling/scoring pipeline separately, use:
-        modal run modal_run.py::generate_one_shot
-        modal run modal_run.py::sample
-        modal run modal_run.py::score
-
     CLI:
         modal run --detach modal_run.py::creative_smoke
         modal run --detach modal_run.py::creative_smoke \\
             --solver-model Qwen/Qwen3-4B-Base \\
             --challenger-model Qwen/Qwen3-4B-Base \\
-            --num-train 4 --smoke-challenger-max-steps 2
+            --num-train 4 --max-steps 2
     """
     fc = train_creative_challenger.spawn(
         solver_model=solver_model,
@@ -1530,8 +1538,8 @@ def creative_smoke(
         num_train=num_train,
         num_val=num_val,
         seed=seed,
-        smoke_challenger_max_steps=smoke_challenger_max_steps,
-        smoke_challenger_rollout_n=smoke_challenger_rollout_n,
+        max_steps=max_steps,
+        rollout_n=rollout_n,
     )
     print(f"=== Challenger training submitted (function call: {fc.object_id}) ===")
 
@@ -1545,6 +1553,7 @@ def creative_smoke(
     volumes={REMOTE_STORAGE_PATH: volume},
     secrets=[runtime_secret],
     timeout=MODAL_TIMEOUT,
+    retries=2,
     env={
         "VLLM_DISABLE_COMPILE_CACHE":      "1",
         "TORCHINDUCTOR_MAX_AUTOTUNE":       "0",
@@ -1565,34 +1574,34 @@ def train_creative_solver(
     num_train: int = 8,
     num_val: int = 2,
     seed: int = 42,
-    smoke_solver_max_steps: int = 4,
-    smoke_solver_rollout_n: int = 4,
-):
+    max_steps: int = 4,
+    rollout_n: int = 4,
+    run_id: str = "",
+    wandb_group: str = "",
+    coevolve_iteration: int = 1,
+) -> str:
     """
     Train the creative writing solver with VERL GRPO + Pairwise Rank Reward.
 
     Pipeline (creative_solver_smoke.sh):
-      Step 0: Load challenger checkpoint (GPU 7), generate writing prompts via
-              one_shot_creative_question_generate.py, then release GPU 7.
+      Step 0: Load challenger checkpoint (GPU 7), generate writing prompts, release GPU 7.
       Step 1: Build train/val parquet — problem=query, answer=WritingPrompt JSON.
-              Rows with missing query or criteria are skipped at build time.
-      Step 2: Train solver (GPUs 0-3) with VERL GRPO.  For each prompt, solver
-              generates rollout_n independent responses; BatchEvalAgent scores
-              each; normalised rank reward R_i = (G - rank_i) / (G - 1) is
-              returned.  Mean reward ≈ 0.5 → GRPO advantages always zero-centred.
+      Step 2: Train solver (GPUs 0-3) with VERL GRPO + normalised rank reward
+              R_i = (G - rank_i) / (G - 1).  Mean ≈ 0.5 → advantages zero-centred.
       Step 3: Merge checkpoint.
 
     Args:
-        solver_model:             HF id or volume path — model being trained.
-        challenger_checkpoint:    Merged challenger checkpoint path on the volume
-                                  (e.g. /storage/models/…_challenger_v1/
-                                  global_step_3/actor/huggingface).
-        abbr:                     Short name for checkpoint directories.
-        num_train:                Number of training rows.
-        num_val:                  Number of validation rows.
-        seed:                     Random seed for prompt generation.
-        smoke_solver_max_steps:   Max VERL training steps.
-        smoke_solver_rollout_n:   G — solver samples per prompt (worker.rollout.n).
+        solver_model:          HF id or volume path — model being trained.
+        challenger_checkpoint: Merged challenger checkpoint path on the volume.
+        abbr:                  Short name for checkpoint directories.
+        num_train:             Training rows.
+        num_val:               Validation rows.
+        seed:                  Random seed for prompt generation.
+        max_steps:             Max VERL training steps.
+        rollout_n:             G — solver samples per prompt (worker.rollout.n).
+        run_id:                Run timestamp set by orchestrator; auto-generated if empty.
+        wandb_group:           W&B group for sub-runs; W&B disabled if empty.
+        coevolve_iteration:    Current co-evolution iteration (metadata only).
     """
     import os
     import subprocess
@@ -1604,7 +1613,7 @@ def train_creative_solver(
     if not challenger_checkpoint:
         raise ValueError(
             "challenger_checkpoint must be set to the merged challenger ckpt path, "
-            "e.g. /storage/models/qwen3-4b-creative-smoke_challenger_v1/"
+            "e.g. /storage/models/qwen3-4b-creative-smoke_challenger/"
             "global_step_3/actor/huggingface"
         )
 
@@ -1637,16 +1646,22 @@ def train_creative_solver(
         "STORAGE_PATH":              storage,
         "HF_HOME":                   hf_cache,
         "HUGGINGFACE_HUB_CACHE":     hf_cache,
-        "SMOKE_SOLVER_MAX_STEPS":    str(smoke_solver_max_steps),
-        "SMOKE_SOLVER_ROLLOUT_N":    str(smoke_solver_rollout_n),
+        "SOLVER_MAX_STEPS":          str(max_steps),
+        "SOLVER_ROLLOUT_N":          str(rollout_n),
         "REMOTE_REPO_PATH":          repo,
+        "COEVOLVE_ITERATION":        str(coevolve_iteration),
     }
+    if run_id:
+        env["RUN_ID"] = run_id
+    if wandb_group:
+        env["WANDB_MODE"] = "online"
+        env["WANDB_RUN_GROUP"] = wandb_group
 
     print(
         f"=== Creative Solver Training | "
         f"solver={solver_model}  challenger_ckpt={challenger_checkpoint}  "
         f"abbr={abbr}  num_train={num_train}  num_val={num_val}  "
-        f"steps={smoke_solver_max_steps}  G={smoke_solver_rollout_n} ==="
+        f"steps={max_steps}  G={rollout_n} ==="
     )
 
     subprocess.run(
@@ -1661,7 +1676,10 @@ def train_creative_solver(
     )
 
     volume.commit()
-    print("=== Creative solver training complete — artefacts committed to volume ===")
+    s_merge = max_steps - 1
+    solver_ckpt = f"{storage}/models/{abbr}_solver/global_step_{s_merge}/actor/huggingface"
+    print(f"=== Creative solver training complete — checkpoint: {solver_ckpt} ===")
+    return solver_ckpt
 
 
 @app.local_entrypoint()
@@ -1672,28 +1690,23 @@ def solver_smoke(
     num_train: int = 8,
     num_val: int = 2,
     seed: int = 42,
-    smoke_solver_max_steps: int = 2,
-    smoke_solver_rollout_n: int = 4,
+    max_steps: int = 2,
+    rollout_n: int = 4,
 ):
     """
-    Creative writing solver smoke test: train solver with Pairwise Rank Reward.
+    Creative writing solver training: train solver with Pairwise Rank Reward.
 
     Requires a merged challenger checkpoint produced by creative_smoke (or
     train_creative_challenger).  Pass its path as --challenger-checkpoint.
 
-    Reward is computed live during training:
-      solver generates G responses per prompt → BatchEvalAgent (Claude) scores
-      each → normalised rank reward R_i = (G - rank_i) / (G - 1).
-
     CLI:
         modal run --detach modal_run.py::solver_smoke \\
-            --challenger-checkpoint models/qwen3-4b-creative-smoke_challenger_v1/global_step_2/actor/huggingface
+            --challenger-checkpoint /storage/models/…/huggingface
 
         modal run --detach modal_run.py::solver_smoke \\
             --solver-model Qwen/Qwen3-4B-Base \\
             --challenger-checkpoint /storage/models/…/huggingface \\
-            --abbr qwen3-4b-creative-smoke \\
-            --num-train 8 --smoke-solver-max-steps 4 --smoke-solver-rollout-n 4
+            --abbr qwen3-4b-creative --num-train 8 --max-steps 4 --rollout-n 4
     """
     fc = train_creative_solver.spawn(
         solver_model=solver_model,
@@ -1702,45 +1715,38 @@ def solver_smoke(
         num_train=num_train,
         num_val=num_val,
         seed=seed,
-        smoke_solver_max_steps=smoke_solver_max_steps,
-        smoke_solver_rollout_n=smoke_solver_rollout_n,
+        max_steps=max_steps,
+        rollout_n=rollout_n,
     )
     print(f"=== Solver training submitted (function call: {fc.object_id}) ===")
 
 
 # ---------------------------------------------------------------------------
-# Creative Co-Evolution Training
+# Creative Co-Evolution Training  —  Python-orchestrated loop
 # ---------------------------------------------------------------------------
-# Ties creative_challenger_smoke.sh and creative_solver_smoke.sh into a
-# single iterative loop where each model feeds the other:
+# CPU-only orchestrator.  Calls train_creative_challenger and
+# train_creative_solver as sequential Modal GPU functions.
 #
-#   Iteration i, Phase A — Challenger:
-#     solver(i-1) is the frozen reward oracle; challenger(i-1) is trained
-#     → challenger(i) learns to write harder prompts.
+# Preemption-safe: after each phase the orchestrator writes a state file to
+# the volume and calls volume.commit().  On Modal retry it reads the state file,
+# skips completed phases, and resumes from the right checkpoint.
 #
-#   Iteration i, Phase B — Solver:
-#     challenger(i) generates prompts; solver(i-1) is trained on them
-#     → solver(i) learns to answer the harder prompts.
+# Checkpoint layout after N iterations:
+#   models/<abbr>_<run_ts>_iter<iter_num>_challenger/global_step_<c_merge>/actor/huggingface/
+#   models/<abbr>_<run_ts>_iter<iter_num>_solver/global_step_<s_merge>/actor/huggingface/
+#   …
 #
-# Iteration 1 initialises both from base_model.
+# State file (removed on clean completion):
+#   coevolve_state/<abbr>.json
 # ---------------------------------------------------------------------------
 @app.function(
-    gpu=MODAL_FULL_GPU,
     image=image,
     volumes={REMOTE_STORAGE_PATH: volume},
     secrets=[runtime_secret],
     timeout=MODAL_TIMEOUT,
+    retries=2,
     env={
-        "VLLM_DISABLE_COMPILE_CACHE":      "1",
-        "TORCHINDUCTOR_MAX_AUTOTUNE":       "0",
-        "TOKENIZERS_PARALLELISM":           "true",
-        "NCCL_DEBUG":                       "WARN",
-        "VLLM_LOGGING_LEVEL":               "WARN",
-        "TORCH_NCCL_AVOID_RECORD_STREAMS":  "1",
-        "PYTORCH_CUDA_ALLOC_CONF":          "expandable_segments:False",
-        "PYTHONUNBUFFERED":                 "1",
-        "NO_PROXY":                         "127.0.0.1,localhost,0.0.0.0",
-        "no_proxy":                         "127.0.0.1,localhost,0.0.0.0",
+        "PYTHONUNBUFFERED": "1",
     },
 )
 def train_creative_coevolve(
@@ -1750,98 +1756,238 @@ def train_creative_coevolve(
     num_train: int = 8,
     num_val: int = 2,
     seed: int = 42,
-    smoke_challenger_max_steps: int = 4,
-    smoke_challenger_rollout_n: int = 4,
-    smoke_solver_max_steps: int = 4,
-    smoke_solver_rollout_n: int = 4,
+    challenger_max_steps: int = 4,
+    challenger_rollout_n: int = 4,
+    solver_max_steps: int = 4,
+    solver_rollout_n: int = 4,
 ):
     """
     Co-evolving creative challenger + solver training.
 
-    Runs num_iters rounds of alternating training where each model's latest
-    checkpoint is used by the other:
+    Each iteration runs two phases:
+      Phase A — challenger trains (VERL GRPO) using the current solver as the
+                reward oracle; learns to generate harder prompts.
+      Phase B — solver trains (VERL GRPO + rank reward) on prompts from the
+                updated challenger; learns to answer the harder prompts.
 
-      Iteration 1:
-        Phase A — challenger trains from base_model using base_model as solver
-        Phase B — solver    trains from base_model using iter1 challenger ckpt
-
-      Iteration 2:
-        Phase A — challenger trains from iter1 challenger ckpt using iter1 solver ckpt
-        Phase B — solver    trains from iter1 solver    ckpt using iter2 challenger ckpt
-
-      … and so on.
-
-    After each phase, creative_coevolve_smoke.sh calls verify_checkpoint() to
-    assert that model_merger.py produced actual weight files (model.safetensors
-    or pytorch_model.bin).  If weights are absent the run aborts with a
-    diagnostic before burning GPU time on the next phase.
+    Iteration 1 starts both from base_model.  Later iterations use the merged
+    checkpoints produced by the previous iteration.
 
     Args:
-        base_model:                 HF id or volume path — start for both models.
-        abbr:                       Short prefix for all checkpoint directories.
-        num_iters:                  Number of co-evolution rounds.
-        num_train:                  Training rows per model per round.
-        num_val:                    Validation rows per round.
-        seed:                       Random seed (shared; prompt diversity comes
-                                    from the evolving challenger weights).
-        smoke_challenger_max_steps: VERL training steps per challenger round.
-        smoke_solver_max_steps:     VERL training steps per solver round.
-        smoke_solver_rollout_n:     G — solver samples per prompt (rank reward).
+        base_model:           HF id or volume path — starting point for both models.
+        abbr:                 Short prefix for checkpoint directories.
+        num_iters:            Number of co-evolution rounds.
+        num_train:            Training rows per model per round.
+        num_val:              Validation rows per round.
+        seed:                 Random seed.
+        challenger_max_steps: VERL training steps per challenger round.
+        challenger_rollout_n: GRPO rollout n for challenger.
+        solver_max_steps:     VERL training steps per solver round.
+        solver_rollout_n:     G — solver samples per prompt (rank reward).
     """
     import os
+    import json
+    import glob
+    import datetime
     import subprocess
-    import sys
 
-    repo    = REMOTE_REPO_PATH
-    storage = os.environ["STORAGE_PATH"]
+    storage   = os.environ["STORAGE_PATH"]
+    hf_name   = os.environ.get("HUGGINGFACENAME", "")
+    hf_token  = os.environ.get("HF_TOKEN", "")
+    wandb_key = os.environ.get("WANDB_API_KEY", "")
 
-    os.chdir(repo)
-    sys.path.insert(0, repo)
+    # ---- Resume state ----
+    state_dir  = f"{storage}/coevolve_state"
+    os.makedirs(state_dir, exist_ok=True)
+    state_file = f"{state_dir}/{abbr}.json"
 
-    hf_cache = f"{storage}/hf_cache"
-    os.makedirs(hf_cache, exist_ok=True)
-    os.environ["HF_HOME"]               = hf_cache
-    os.environ["HUGGINGFACE_HUB_CACHE"] = hf_cache
+    if os.path.exists(state_file):
+        with open(state_file) as f:
+            state = json.load(f)
+        run_ts             = state["run_ts"]
+        wandb_group        = state["wandb_group"]
+        next_iter          = state["next_iter"]
+        next_phase         = state["next_phase"]
+        current_challenger = state["current_challenger"]
+        current_solver     = state["current_solver"]
+        print(f"[RESUME] iter={next_iter} phase={next_phase} run_ts={run_ts}")
+        print(f"[RESUME]   challenger : {current_challenger}")
+        print(f"[RESUME]   solver     : {current_solver}")
+    else:
+        run_ts             = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        wandb_group        = f"coevolve_{abbr}_{run_ts}"
+        next_iter          = 1
+        next_phase         = "challenger"
+        current_challenger = base_model
+        current_solver     = base_model
+        print(f"[FRESH] Starting co-evolution run_ts={run_ts}")
 
-    env = {
-        **os.environ,
-        "STORAGE_PATH":               storage,
-        "HF_HOME":                    hf_cache,
-        "HUGGINGFACE_HUB_CACHE":      hf_cache,
-        "SMOKE_CHALLENGER_MAX_STEPS":   str(smoke_challenger_max_steps),
-        "SMOKE_CHALLENGER_ROLLOUT_N":   str(smoke_challenger_rollout_n),
-        "SMOKE_SOLVER_MAX_STEPS":       str(smoke_solver_max_steps),
-        "SMOKE_SOLVER_ROLLOUT_N":       str(smoke_solver_rollout_n),
-        "REMOTE_REPO_PATH":             repo,
-    }
+    # ---- W&B summary run — creates the group so all sub-runs nest under it ----
+    if wandb_key:
+        try:
+            import wandb as _wandb
+            os.environ["WANDB_API_KEY"] = wandb_key
+            _run = _wandb.init(
+                project="r-zero-creative",
+                job_type="coevolve_summary",
+                name=f"coevolve_{abbr}_{run_ts}",
+                group=wandb_group,
+                config={
+                    "base_model":           base_model,
+                    "num_iters":            num_iters,
+                    "num_train":            num_train,
+                    "num_val":              num_val,
+                    "seed":                 seed,
+                    "challenger_max_steps": challenger_max_steps,
+                    "solver_max_steps":     solver_max_steps,
+                    "run_ts":               run_ts,
+                },
+                tags=["coevolve"],
+            )
+            _wandb.finish()
+            print(f"[W&B] Group: {wandb_group}")
+        except Exception as e:
+            print(f"[W&B] Summary run skipped: {e}")
+
+    # ---- Helpers ----
+    def _write_state(ni: int, np_: str, cc: str, cs: str) -> None:
+        with open(state_file, "w") as f:
+            json.dump({
+                "run_ts":             run_ts,
+                "wandb_group":        wandb_group,
+                "next_iter":          ni,
+                "next_phase":         np_,
+                "current_challenger": cc,
+                "current_solver":     cs,
+            }, f, indent=2)
+
+    def _verify_checkpoint(label: str, ckpt: str) -> None:
+        volume.reload()
+        if not os.path.exists(os.path.join(ckpt, "config.json")):
+            raise RuntimeError(f"{label}: config.json missing at {ckpt}")
+        has_weights = (
+            bool(glob.glob(os.path.join(ckpt, "model*.safetensors"))) or
+            bool(glob.glob(os.path.join(ckpt, "pytorch_model*.bin")))
+        )
+        if not has_weights:
+            raise RuntimeError(f"{label}: no weight files at {ckpt}")
+        print(f"[OK] {label} checkpoint verified: {ckpt}")
+
+    def _upload_parquets(hf_prefix: str, local_train: str, local_val: str) -> None:
+        if not hf_token or not hf_name:
+            print("    [HF] HF_TOKEN or HUGGINGFACENAME not set — skipping upload")
+            return
+        repo_id = f"{hf_name}/r-zero-creative-datasets"
+        print(f"    [HF] → {repo_id}/{hf_prefix}/")
+        for local, hf_path in [
+            (local_train, f"{hf_prefix}/train.parquet"),
+            (local_val,   f"{hf_prefix}/val.parquet"),
+        ]:
+            try:
+                subprocess.run(
+                    ["huggingface-cli", "upload", repo_id, local, hf_path,
+                     "--repo-type", "dataset", "--token", hf_token],
+                    check=True,
+                )
+            except Exception as e:
+                print(f"    [HF] ✗ upload failed {hf_path}: {e}")
 
     print(
         f"=== Creative Co-Evolution | base={base_model} abbr={abbr} "
         f"iters={num_iters} train={num_train} val={num_val} seed={seed} "
-        f"c_steps={smoke_challenger_max_steps} c_rollout_n={smoke_challenger_rollout_n} "
-        f"s_steps={smoke_solver_max_steps} s_rollout_n={smoke_solver_rollout_n} ==="
+        f"c_steps={challenger_max_steps} c_rollout_n={challenger_rollout_n} "
+        f"s_steps={solver_max_steps} s_rollout_n={solver_rollout_n} ==="
     )
 
-    result = subprocess.run(
-        [
-            "bash", "scripts/creative_coevolve_smoke.sh",
-            base_model, abbr,
-            str(num_iters), str(num_train), str(num_val), str(seed),
-        ],
-        env=env,
-        cwd=repo,
-        check=False,
-    )
+    for iter_num in range(1, num_iters + 1):
+        if iter_num < next_iter:
+            print(f"[SKIP] Iteration {iter_num} already complete")
+            continue
 
-    # Always commit artefacts written so far (partial runs are useful)
+        iter_abbr = f"{abbr}_{run_ts}_iter{iter_num}"
+        hf_prefix = f"{abbr}/{run_ts}/iter{iter_num}"
+
+        print(f"\n{'='*58}")
+        print(f" CO-EVOLUTION ITERATION  {iter_num} / {num_iters}  (run: {run_ts})")
+        print(f"   solver init     : {current_solver}")
+        print(f"   challenger init : {current_challenger}")
+        print(f"{'='*58}")
+
+        # ---- Phase A: Challenger ----
+        # Skip only when resuming an in-progress iteration where Phase A already
+        # completed but Phase B had not yet started (next_phase == "solver").
+        resuming_at_solver = (iter_num == next_iter and next_phase == "solver")
+
+        if resuming_at_solver:
+            challenger_ckpt = current_challenger
+            print(f"\n[RESUME] Phase A already done — using: {challenger_ckpt}")
+        else:
+            print(f"\n>>> Phase A — Challenger training (iter {iter_num})")
+            challenger_ckpt = train_creative_challenger.remote(
+                solver_model=current_solver,
+                challenger_model=current_challenger,
+                abbr=iter_abbr,
+                num_train=num_train,
+                num_val=num_val,
+                seed=seed,
+                max_steps=challenger_max_steps,
+                rollout_n=challenger_rollout_n,
+                run_id=run_ts,
+                wandb_group=wandb_group,
+                coevolve_iteration=iter_num,
+            )
+            _verify_checkpoint(f"Challenger iter{iter_num}", challenger_ckpt)
+            _upload_parquets(
+                f"{hf_prefix}/challenger",
+                f"{storage}/creative_smoke/{iter_abbr}_train.parquet",
+                f"{storage}/creative_smoke/{iter_abbr}_val.parquet",
+            )
+            _write_state(iter_num, "solver", challenger_ckpt, current_solver)
+            volume.commit()
+            print(f"[STATE] Committed after Phase A iter {iter_num}")
+
+        # ---- Phase B: Solver ----
+        print(f"\n>>> Phase B — Solver training (iter {iter_num})")
+        solver_ckpt = train_creative_solver.remote(
+            solver_model=current_solver,
+            challenger_checkpoint=challenger_ckpt,
+            abbr=iter_abbr,
+            num_train=num_train,
+            num_val=num_val,
+            seed=seed,
+            max_steps=solver_max_steps,
+            rollout_n=solver_rollout_n,
+            run_id=run_ts,
+            wandb_group=wandb_group,
+            coevolve_iteration=iter_num,
+        )
+        _verify_checkpoint(f"Solver iter{iter_num}", solver_ckpt)
+        _upload_parquets(
+            f"{hf_prefix}/solver",
+            f"{storage}/creative_smoke/{iter_abbr}_solver_train.parquet",
+            f"{storage}/creative_smoke/{iter_abbr}_solver_val.parquet",
+        )
+        current_challenger = challenger_ckpt
+        current_solver     = solver_ckpt
+        _write_state(iter_num + 1, "challenger", current_challenger, current_solver)
+        volume.commit()
+        print(f"[STATE] Committed after Phase B iter {iter_num}")
+
+        print(f"\n=== Iteration {iter_num} complete ===")
+        print(f"    Challenger : {current_challenger}")
+        print(f"    Solver     : {current_solver}")
+
+    # Clean completion — remove state so next run with same abbr starts fresh.
+    if os.path.exists(state_file):
+        os.remove(state_file)
     volume.commit()
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"creative_coevolve_smoke.sh exited with code {result.returncode}"
-        )
-
-    print("=== Creative co-evolution complete — artefacts committed to volume ===")
+    print(f"\n{'='*58}")
+    print(f" Creative Co-Evolution Complete")
+    print(f" Iterations      : {num_iters}")
+    print(f" Final challenger : {current_challenger}")
+    print(f" Final solver     : {current_solver}")
+    print(f"{'='*58}")
 
 
 @app.local_entrypoint()
@@ -1852,13 +1998,13 @@ def coevolve_smoke(
     num_train: int = 8,
     num_val: int = 2,
     seed: int = 42,
-    smoke_challenger_max_steps: int = 4,
-    smoke_challenger_rollout_n: int = 4,
-    smoke_solver_max_steps: int = 4,
-    smoke_solver_rollout_n: int = 4,
+    challenger_max_steps: int = 4,
+    challenger_rollout_n: int = 4,
+    solver_max_steps: int = 4,
+    solver_rollout_n: int = 4,
 ):
     """
-    Co-evolving creative challenger + solver smoke test.
+    Co-evolving creative challenger + solver training.
 
     Alternates challenger and solver training for num_iters rounds.  Each
     model uses the other's latest merged checkpoint — the solver forces the
@@ -1866,14 +2012,12 @@ def coevolve_smoke(
     to improve.
 
     Checkpoint layout on the volume after N iterations:
-      models/<abbr>_iter1_challenger_v1/global_step_<c_merge>/actor/huggingface/
-      models/<abbr>_iter1_solver_v1/global_step_<s_merge>/actor/huggingface/
-      models/<abbr>_iter2_challenger_v1/…
-      models/<abbr>_iter2_solver_v1/…
+      models/<abbr>_<run_ts>_iter1_challenger/global_step_<c_merge>/actor/huggingface/
+      models/<abbr>_<run_ts>_iter1_solver/global_step_<s_merge>/actor/huggingface/
       …
 
     CLI:
-        # Quick smoke (2 iterations, default sizes):
+        # 2 iterations, default sizes:
         modal run --detach modal_run.py::coevolve_smoke
 
         # Custom model / scale:
@@ -1882,9 +2026,9 @@ def coevolve_smoke(
             --abbr mini-hero \
             --num-iters 3 \
             --num-train 32 \
-            --smoke-challenger-max-steps 20 \
-            --smoke-solver-max-steps 32 \
-            --smoke-solver-rollout-n 8
+            --challenger-max-steps 20 \
+            --solver-max-steps 32 \
+            --solver-rollout-n 8
     """
     fc = train_creative_coevolve.spawn(
         base_model=base_model,
@@ -1893,9 +2037,9 @@ def coevolve_smoke(
         num_train=num_train,
         num_val=num_val,
         seed=seed,
-        smoke_challenger_max_steps=smoke_challenger_max_steps,
-        smoke_challenger_rollout_n=smoke_challenger_rollout_n,
-        smoke_solver_max_steps=smoke_solver_max_steps,
-        smoke_solver_rollout_n=smoke_solver_rollout_n,
+        challenger_max_steps=challenger_max_steps,
+        challenger_rollout_n=challenger_rollout_n,
+        solver_max_steps=solver_max_steps,
+        solver_rollout_n=solver_rollout_n,
     )
     print(f"=== Co-evolution submitted (function call: {fc.object_id}) ===")

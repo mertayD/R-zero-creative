@@ -96,6 +96,7 @@ class RLHFDataset(Dataset):
         min_pixels: Optional[int] = None,
         filter_overlong_prompts: bool = True,
         max_samples: Optional[int] = None,
+        apply_chat_template_kwargs: Optional[Dict[str, Any]] = None,
     ):
         self.tokenizer = tokenizer
         self.processor = processor
@@ -107,6 +108,8 @@ class RLHFDataset(Dataset):
         self.max_pixels = max_pixels
         self.min_pixels = min_pixels
         self.filter_overlong_prompts = filter_overlong_prompts
+        # Extra kwargs forwarded to apply_chat_template (e.g. enable_thinking).
+        self.apply_chat_template_kwargs = apply_chat_template_kwargs or {}
 
         if "@" in data_path:
             data_path, data_split = data_path.split("@")
@@ -217,12 +220,20 @@ class RLHFDataset(Dataset):
         else:
             return [{"role": "user", "content": prompt_str}]
 
+    def _safe_chat_template_kwargs(self) -> Dict[str, Any]:
+        """apply_chat_template_kwargs with keys we set explicitly stripped out,
+        so user-supplied values can't collide (mirrors upstream veRL)."""
+        kwargs = dict(self.apply_chat_template_kwargs)
+        for key in ("tokenize", "return_dict", "return_tensors", "add_generation_prompt"):
+            kwargs.pop(key, None)
+        return kwargs
+
     def _filter_overlong_prompts(self, example: Dict[str, Any]) -> bool:
         messages = self._build_messages(example)
         processing_class = self.processor if self.processor is not None else self.tokenizer
         if self.tokenizer.chat_template:
             return (
-                len(processing_class.apply_chat_template(messages, add_generation_prompt=True)) <= self.max_prompt_length
+                len(processing_class.apply_chat_template(messages, add_generation_prompt=True, **self._safe_chat_template_kwargs())) <= self.max_prompt_length
             )
         else:
             return (
@@ -238,7 +249,7 @@ class RLHFDataset(Dataset):
         messages = self._build_messages(example)
 
         if self.image_key in example:
-            prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+            prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, **self._safe_chat_template_kwargs())
             raw_image_data = example.pop(self.image_key)
             images = [
                 process_image(image, min_pixels=self.min_pixels, max_pixels=self.max_pixels)
@@ -250,7 +261,7 @@ class RLHFDataset(Dataset):
             example["multi_modal_data"] = {"image": raw_image_data}
         else:
             if self.tokenizer.chat_template:
-                prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+                prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, **self._safe_chat_template_kwargs())
             else:
                 prompt = "system: " + messages[0]["content"] + '\n' + "user: " + messages[1]["content"]
             model_inputs = self.tokenizer([prompt], add_special_tokens=False, return_tensors="pt")

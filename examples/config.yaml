@@ -5,11 +5,14 @@ data:
   answer_key: answer
   image_key: images
   max_prompt_length: 2048
-  max_response_length: 2048
+  max_response_length: 32768
   rollout_batch_size: 512
   val_batch_size: 1024
   format_prompt: ./examples/format_prompt/math_format.jinja
   override_chat_template: null
+  # Forwarded to tokenizer.apply_chat_template during prompt building.
+  # Set apply_chat_template_kwargs.enable_thinking=true for Qwen3 thinking mode.
+  apply_chat_template_kwargs: {}
   shuffle: true
   seed: 1
   max_pixels: 4194304

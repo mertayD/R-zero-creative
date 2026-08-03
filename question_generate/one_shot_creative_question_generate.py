@@ -59,6 +59,7 @@ from question_generate.creative_writing_prompts import (
     WRITING_DOMAINS,
     QUERY_REFINEMENT_GUIDANCE_POOL,
 )
+from evaluation.shared.utilities import split_thinking
 
 STORAGE_PATH = os.getenv("STORAGE_PATH")
 
@@ -122,6 +123,10 @@ class FormatValidator:
     def validate_response(response: str) -> tuple[int, dict | list | None]:
         """
         Validate complete response format (XML tags + JSON).
+
+        Expects the plain answer — callers must strip any <think>…</think> trace
+        (via split_thinking) before calling, so the <output> parser can't match
+        tags that appear inside the reasoning.
 
         Returns:
             Tuple of (score, parsed_json)
@@ -190,6 +195,9 @@ class WritingPrompt:
     format_score: int = 1
     language: str = "English"
     seed: int = 42
+    # Raw <think>…</think> reasoning trace the model produced before the answer
+    # (empty for non-thinking models). Stored for inspection, not used downstream.
+    thinking: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -221,6 +229,7 @@ class WritingPrompt:
             format_score=data.get("format_score", 1),
             language=data.get("language", "English"),
             seed=data.get("seed", 42),
+            thinking=data.get("thinking", ""),
         )
 
 
@@ -460,50 +469,56 @@ CRITICAL REMINDERS:
     return system_prompt, user_prompt, applied_guidance
 
 
-def validate_one_shot_response(response: str) -> tuple[bool, Optional[dict]]:
+def validate_one_shot_response(response: str) -> tuple[bool, Optional[dict], str]:
     """
     Validate one-shot response format with full WritingBench criteria structure.
 
+    Splits off the <think>…</think> reasoning trace (thinking-mode models like
+    Qwen3) before validation and returns it so the caller can store it alongside
+    the generated prompt.
+
     Returns:
-        Tuple of (is_valid, parsed_json)
+        Tuple of (is_valid, parsed_json, thinking)
     """
-    score, parsed = FormatValidator.validate_response(response)
+    thinking, answer = split_thinking(response)
+
+    score, parsed = FormatValidator.validate_response(answer)
     if score != 1:
-        return False, None
+        return False, None, thinking
 
     # Validate structure
     if not isinstance(parsed, dict):
         logger.warning("Response is not a dict")
-        return False, None
+        return False, None, thinking
 
     if "query" not in parsed or "criteria" not in parsed:
         logger.warning("Missing required fields: query or criteria")
-        return False, None
+        return False, None, thinking
 
     # Validate criteria structure
     criteria = parsed.get("criteria", [])
     if not isinstance(criteria, list) or len(criteria) == 0:
         logger.warning("Criteria is not a non-empty list")
-        return False, None
+        return False, None, thinking
 
     # Validate each criterion has required fields
     required_score_levels = ["1-2", "3-4", "5-6", "7-8", "9-10"]
     for criterion in criteria:
         if not isinstance(criterion, dict):
             logger.warning("Criterion is not a dict")
-            return False, None
+            return False, None, thinking
 
         if "name" not in criterion or "criteria_description" not in criterion:
             logger.warning("Criterion missing name or criteria_description")
-            return False, None
+            return False, None, thinking
 
         # Check for all score levels
         for level in required_score_levels:
             if level not in criterion:
                 logger.warning(f"Criterion missing score level: {level}")
-                return False, None
+                return False, None, thinking
 
-    return True, parsed
+    return True, parsed, thinking
 
 
 def generate_prompts_batch(
@@ -561,6 +576,7 @@ def generate_prompts_batch(
                 tokenize=False,
                 add_generation_prompt=True,
                 add_special_tokens=True,
+                enable_thinking=True,
             )
         else:
             prompt = f"system: {system_prompt}\n\nuser: {user_prompt}"
@@ -572,10 +588,15 @@ def generate_prompts_batch(
 
         while attempt < num_format_retries and not format_valid:
             total_attempts += 1
+            # Qwen3 thinking-mode best practices (no greedy decoding). max_tokens
+            # is generous because the reasoning trace precedes the JSON output;
+            # too small a budget truncates the <output> block and fails validation.
             sampling_params = vllm.SamplingParams(
-                max_tokens=4096,
-                temperature=1.0,
+                max_tokens=32768,
+                temperature=0.6,
                 top_p=0.95,
+                top_k=20,
+                min_p=0.0,
                 n=1,
                 stop_token_ids=[tokenizer.eos_token_id],
             )
@@ -583,7 +604,7 @@ def generate_prompts_batch(
             completions = model.generate([prompt], sampling_params=sampling_params)
             response = completions[0].outputs[0].text
 
-            is_valid, parsed_json = validate_one_shot_response(response)
+            is_valid, parsed_json, thinking_trace = validate_one_shot_response(response)
 
             if is_valid and not is_english_output(parsed_json.get('query', '')):
                 logger.warning("Non-English characters detected in query; retrying...")
@@ -619,10 +640,15 @@ def generate_prompts_batch(
                 guidance_applied=applied_guidance,
                 format_score=1,
                 seed=seed,
+                thinking=thinking_trace,
             )
 
             batch.add_prompt(writing_prompt)
-            print(f"  [{len(batch.prompts)}/{num_prompts}] ✓ {domain_key}/{subdomain} | criteria: {len(writing_prompt.criteria)} | guidance: {len(applied_guidance)}")
+            print(
+                f"  [{len(batch.prompts)}/{num_prompts}] ✓ {domain_key}/{subdomain} "
+                f"| criteria: {len(writing_prompt.criteria)} | guidance: {len(applied_guidance)} "
+                f"| thinking: {len(thinking_trace)} chars"
+            )
         else:
             batch.generation_log["format_validation_failures"] += 1
             print(

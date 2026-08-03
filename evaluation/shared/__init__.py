@@ -2,5 +2,6 @@
 
 from .data_models import WritingPromptResponse, SampleResult
 from .rewards import r_zero_uncertainty, compute_writing_reward
+from .utilities import split_thinking
 
-__all__ = ["WritingPromptResponse", "SampleResult", "r_zero_uncertainty", "compute_writing_reward"]
+__all__ = ["WritingPromptResponse", "SampleResult", "r_zero_uncertainty", "compute_writing_reward", "split_thinking"]
