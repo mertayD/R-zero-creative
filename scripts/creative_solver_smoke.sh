@@ -223,6 +223,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main \
     data.val_files="$VAL_PARQUET" \
     data.prompt_key=problem \
     data.answer_key=answer \
+    data.format_prompt=./examples/format_prompt/creative.jinja \
     data.max_prompt_length=2048 \
     data.max_response_length=4096 \
     data.rollout_batch_size="$ROLLOUT_BATCH" \
