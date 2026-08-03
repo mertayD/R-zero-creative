@@ -379,8 +379,14 @@ def compute_score(
     # raw_scores[i] = avg criterion score (1–10) for predicts[i]
     raw_scores: List[float] = [0.0] * n_samples
 
+    # Judge on the answer only — same reasoning as the T1.8 language filter.
+    # No-op today (thinking disabled, split_thinking returns the whole text
+    # as the answer); once enable_thinking is turned on this also means a
+    # thinking-only, no-answer rollout correctly falls through _score_one's
+    # empty-text check to "empty_answer" instead of scoring the reasoning
+    # trace as if it were the response.
     tasks: List[Tuple[int, str, WritingPrompt]] = [
-        (idx, pred, group["wp"])
+        (idx, split_thinking(pred)[1], group["wp"])
         for group in groups.values()
         for idx, pred in group["samples"]
         if idx not in language_filtered
