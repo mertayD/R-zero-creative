@@ -58,7 +58,8 @@ for _p in (_REPO, _WB_DIR):
 
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 
-from question_generate.one_shot_creative_question_generate import WritingPrompt, is_english_output
+from question_generate.one_shot_creative_question_generate import WritingPrompt, find_cjk_matches
+from evaluation.shared.utilities import split_thinking
 from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
 
 # Concurrent Claude calls — keep below ~50 RPM rate limit.
@@ -326,14 +327,23 @@ def compute_score(
     # ------------------------------------------------------------------ #
     # Step 1b — language filter: skip non-English solver responses        #
     # ------------------------------------------------------------------ #
+    # Filters on the answer only (thinking traces can legitimately contain
+    # stray non-English tokens without the final answer being non-English).
+    # No-op today since thinking is disabled for the solver — split_thinking
+    # returns the whole text as the answer — but this is correct the day
+    # apply_chat_template_kwargs.enable_thinking is turned on (see T1.10).
     failure_reasons: List[str] = [""] * n_samples
     language_filtered: set = set()
     for i, pred in enumerate(predicts):
-        if not is_english_output(pred):
+        _, pred_answer = split_thinking(pred)
+        cjk_matches = find_cjk_matches(pred_answer)
+        if cjk_matches:
             language_filtered.add(i)
             failure_reasons[i] = "language_filter"
             print(
-                f"[creative_solver_caller] non-English response at idx={i}, assigning zero reward",
+                f"[creative_solver_caller] non-English answer at idx={i} "
+                f"({len(cjk_matches)} CJK chars matched) — assigning zero reward; "
+                f"preview={pred_answer[:200]!r}",
                 flush=True,
             )
 

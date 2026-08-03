@@ -42,6 +42,16 @@ _CJK_RE = re.compile(r'[一-鿿㐀-䶿豈-﫿\U00020000-\U0002a6df]')
 def is_english_output(text: str) -> bool:
     """Return False if text contains CJK (Chinese/Japanese/Korean) characters."""
     return not bool(_CJK_RE.search(text))
+
+
+def find_cjk_matches(text: str) -> List[str]:
+    """Return every CJK (Chinese/Japanese/Korean) character found in text.
+
+    Callers that filter on this (e.g. the solver reward caller's language
+    filter) use it to count/preview what actually triggered the filter,
+    instead of only knowing pass/fail from is_english_output.
+    """
+    return _CJK_RE.findall(text)
 from transformers import AutoTokenizer
 
 try:
