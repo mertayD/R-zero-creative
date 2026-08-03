@@ -9,12 +9,14 @@ WritingBench leaderboard switched to on 2025-11-27. Public scores on the
 leaderboard are produced this way, so this keeps our results directly
 comparable.
 
-Sampling parameters are kept exactly as upstream (temperature=1.0,
-max_length=2048) so scores are comparable.
+Sampling parameters are kept close to upstream (temperature=1.0); max_length
+is now a configurable default rather than a fixed 2048 — see WB_JUDGE_MAX_TOKENS.
 
 Configuration:
-    PERPLEXITY_API_KEY   required, your Perplexity Gateway key
-    WB_JUDGE_MODEL       optional, default 'claude-sonnet-4-5'
+    PERPLEXITY_API_KEY            required, your Perplexity Gateway key
+    WB_JUDGE_MODEL                 optional, default 'claude-sonnet-4-5'
+    WB_JUDGE_MAX_TOKENS            optional, default 8192
+    JUDGE_MAX_HTTP_RETRY_ATTEMPTS  optional, default 5
 """
 
 import os
@@ -30,6 +32,31 @@ load_dotenv()
 DEFAULT_JUDGE_MODEL = os.environ.get("WB_JUDGE_MODEL", "claude-sonnet-5")
 PERPLEXITY_GATEWAY_URL = "https://api.perplexity.ai/router/v1/messages"
 ANTHROPIC_API_VERSION = "2023-06-01"
+
+# Judge sampling/response budget. This is a stopgap env-var knob, not the
+# real config system — Phase 2 (creative_rzero/config.py) is where this and
+# every other judge/reward knob become one reviewed, typed config. Until
+# then it at least isn't a bare literal buried in a function signature.
+DEFAULT_JUDGE_MAX_TOKENS = int(os.environ.get("WB_JUDGE_MAX_TOKENS", "8192"))
+
+# Network/HTTP retry budget for a single call_claude invocation — separate
+# from BatchEvalAgent's parse/validation retry budget (max_try in run(),
+# one level up). Backoff is exponential (capped at 30s) with jitter. Was a
+# bare literal (5) inline; now a named, env-overridable constant so it can
+# be tuned without a code change.
+_MAX_HTTP_RETRY_ATTEMPTS = int(os.environ.get("JUDGE_MAX_HTTP_RETRY_ATTEMPTS", "5"))
+
+
+class JudgeAPIError(Exception):
+    """Raised when the judge call fails at the network/HTTP layer (after
+    call_claude's own retry budget is exhausted) — distinct from a
+    JudgeParseError, which means the judge responded but its output never
+    validated. Carries the last HTTP status code seen, if any, so callers
+    can tell a 429 rate limit apart from a 5xx/network failure."""
+
+    def __init__(self, message: str, status_code: int = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ClaudeAgent(object):
@@ -52,7 +79,7 @@ class ClaudeAgent(object):
     def call_claude(self,
                     messages,
                     temperature: float = 1.0,
-                    max_length: int = 2048):
+                    max_length: int = DEFAULT_JUDGE_MAX_TOKENS):
         # Anthropic's Messages API takes `system` as a top-level field, not a
         # role inside `messages`. Strip a leading system message if present and
         # promote it to the top-level field.
@@ -83,10 +110,10 @@ class ClaudeAgent(object):
             data["system"] = system
 
         attempt = 0
-        max_attempts = 5
         wait_time = 1
+        last_status_code = None
 
-        while attempt < max_attempts:
+        while attempt < _MAX_HTTP_RETRY_ATTEMPTS:
             try:
                 response = requests.post(self.url, headers=headers, json=data, timeout=120)
                 if response.status_code == 200:
@@ -96,6 +123,7 @@ class ClaudeAgent(object):
                     text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
                     return text
                 else:
+                    last_status_code = response.status_code
                     print(f"Attempt {attempt+1}: HTTP {response.status_code}: {response.text[:300]}")
             except requests.exceptions.RequestException as e:
                 print(f"Attempt {attempt+1}: network error: {e}")
@@ -104,7 +132,10 @@ class ClaudeAgent(object):
             wait_time = min(wait_time * 2, 30)
             attempt += 1
 
-        raise Exception("Max attempts exceeded. Failed to get a successful response from the Perplexity Gateway.")
+        raise JudgeAPIError(
+            "Max attempts exceeded. Failed to get a successful response from the Perplexity Gateway.",
+            status_code=last_status_code,
+        )
 
     def basic_success_check(self, response):
         return bool(response)
@@ -112,7 +143,7 @@ class ClaudeAgent(object):
     def run(self,
             prompt: str,
             temperature: float = 1.0,
-            max_length: int = 2048,
+            max_length: int = DEFAULT_JUDGE_MAX_TOKENS,
             max_try: int = 5,
             success_check_fn: Callable = None):
         messages = [

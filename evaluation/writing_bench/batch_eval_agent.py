@@ -23,10 +23,30 @@ import json
 
 from batch_eval_prompt import batch_evaluate_prompt
 from evaluate_benchmark import process_gen_field
+from evaluator.llm import JudgeAPIError
+
+
+class JudgeParseError(Exception):
+    """Judge responded successfully every attempt, but the response never
+    parsed/validated as the expected per-criterion JSON — distinct from a
+    JudgeAPIError, which means the judge call itself failed."""
+
+
+class JudgeInputError(Exception):
+    """A criterion dict was missing a required field before any judge call
+    was made — a caller/data bug (e.g. a malformed WritingPrompt.criteria
+    entry), not a judge failure. Raised eagerly so it fails at the same
+    layer as the other two, instead of surfacing as a bare KeyError deep
+    inside _format_criterion."""
 
 
 def _format_criterion(c: dict) -> str:
-    lines = [f"Name: {c['name']}", f"Description: {c['criteria_description']}"]
+    try:
+        name = c["name"]
+        description = c["criteria_description"]
+    except KeyError as e:
+        raise JudgeInputError(f"criterion missing required field {e}: {c!r}") from e
+    lines = [f"Name: {name}", f"Description: {description}"]
     for key in ("1-2", "3-4", "5-6", "7-8", "9-10"):
         if key in c:
             lines.append(f"  {key}: {c[key]}")
@@ -51,17 +71,24 @@ class BatchEvalAgent:
         self.agent = agent
 
     def success_check_fn(self, response: str, expected_names: set) -> bool:
+        """Predicate only — must never raise, so a malformed-but-parseable
+        response (e.g. {"Criterion A": 8} instead of {"Criterion A":
+        {"score": 8}}) is treated as "didn't validate, retry" rather than
+        crashing run()'s retry loop with an unhandled AttributeError/KeyError.
+        Exhausting retries on a persistently malformed shape still concludes
+        cleanly: score_all_criteria raises JudgeParseError, a typed,
+        catchable outcome instead of a stray crash three layers up."""
         try:
             result = json.loads(_strip_fences(response))
-        except (json.JSONDecodeError, TypeError):
+            valid_scores = set(range(1, 11))
+            return all(
+                name in result
+                and isinstance(result[name].get("score"), int)
+                and result[name]["score"] in valid_scores
+                for name in expected_names
+            )
+        except (json.JSONDecodeError, TypeError, AttributeError, KeyError):
             return False
-        valid_scores = set(range(1, 11))
-        return all(
-            name in result
-            and isinstance(result[name].get("score"), int)
-            and result[name]["score"] in valid_scores
-            for name in expected_names
-        )
 
     def score_all_criteria(
         self,
@@ -78,13 +105,26 @@ class BatchEvalAgent:
             query:       The writing prompt query string.
             criteria:    List of criterion dicts with "name", "criteria_description",
                          and optional "1-2" / "3-4" / ... rubric fields.
-            max_retries: Number of retry attempts on parse or validation failure.
+            max_retries: Retry budget for a judge call that responds but fails
+                         validation — forwarded directly as ClaudeAgent.run's
+                         max_try. There is deliberately only one retry loop:
+                         run() already retries against this exact predicate
+                         (success_check_fn=self.success_check_fn below), so a
+                         second loop here would only silently multiply the
+                         retry budget (max_retries * run()'s own max_try)
+                         while retrying the identical check.
 
         Returns:
             Dict mapping criterion name -> {"score": int, "reason": str}.
 
         Raises:
-            ValueError if scoring fails after max_retries attempts.
+            JudgeInputError if a criterion dict is missing a required field
+                           — fails before any judge call is made.
+            JudgeAPIError  if the judge call itself fails (network/HTTP,
+                           after call_claude's own retry budget is exhausted)
+                           — propagates immediately, no parse-retry attempted.
+            JudgeParseError if the judge responds every attempt but the
+                           response never parses/validates after max_retries.
         """
         criteria_block = "\n\n".join(_format_criterion(c) for c in criteria)
         expected_names = {c["name"] for c in criteria}
@@ -95,21 +135,22 @@ class BatchEvalAgent:
             response=process_gen_field(content["response"]),
         )
 
-        retry = 0
-        response = None
-        while retry < max_retries:
-            response, success = self.agent.run(
-                prompt=prompt,
-                success_check_fn=lambda r: self.success_check_fn(r, expected_names),
-            )
-            if success:
-                try:
-                    return json.loads(_strip_fences(response))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            retry += 1
-
-        raise ValueError(
-            f"Failed to score all criteria after {max_retries} attempts. "
-            f"Last response: {response!r}"
+        # A JudgeAPIError means call_claude already exhausted its own retry
+        # budget on network/HTTP failures — it propagates straight out of
+        # run(), uncaught here, rather than being treated as a validation
+        # failure worth retrying.
+        response, success = self.agent.run(
+            prompt=prompt,
+            max_try=max_retries,
+            success_check_fn=lambda r: self.success_check_fn(r, expected_names),
         )
+        if not success:
+            raise JudgeParseError(
+                f"Failed to score all criteria after {max_retries} attempts. "
+                f"Last response: {response!r}"
+            )
+
+        # success_check_fn already proved this parses (same input, same
+        # deterministic _strip_fences) — no try/except here so a future
+        # divergence between the two would surface loudly, not get swallowed.
+        return json.loads(_strip_fences(response))

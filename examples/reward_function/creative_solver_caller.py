@@ -57,6 +57,7 @@ for _p in (_REPO, _WB_DIR):
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 
 from question_generate.one_shot_creative_question_generate import WritingPrompt, is_english_output
+from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
 
 # Concurrent Claude calls — keep below ~50 RPM rate limit.
 # Raise via CREATIVE_SCORER_MAX_WORKERS if your API tier allows more.
@@ -92,6 +93,7 @@ _solver_step: int = 0
 def _log_solver_rollouts(
     groups: "OrderedDict[str, dict]",
     raw_scores: List[float],
+    failure_reasons: List[str],
     rewards: List[Dict[str, float]],
 ) -> None:
     global _solver_step
@@ -117,6 +119,7 @@ def _log_solver_rollouts(
                 "input_query":      wp.query,
                 "response_preview": response_text[:400],
                 "raw_score":        round(raw_scores[idx], 4),
+                "failure_reason":   failure_reasons[idx],
                 "rank_reward":      round(rewards[idx].get("overall", 0.0), 4),
                 "accuracy":         round(rewards[idx].get("accuracy", 0.0), 4),
             }))
@@ -163,24 +166,54 @@ def _get_agent():
 # ---------------------------------------------------------------------------
 # Per-sample scoring
 # ---------------------------------------------------------------------------
+# failure_reason taxonomy — every sample gets exactly one, so distributions
+# like "79% exact zero" become a one-groupby answer instead of a mystery:
+#   ok                — scored normally
+#   empty_answer      — response text was empty, nothing to grade
+#   invalid_criteria  — wp.criteria was missing a required field (data bug,
+#                        not a judge failure) — fails before any judge call
+#   judge_parse_fail  — judge responded every retry but output never parsed
+#   judge_rate_limit  — judge call failed with HTTP 429 after its own retries
+#   judge_api_error   — judge call failed (network/5xx) after its own retries
+#   language_filter   — non-English response, excluded before scoring
+# ---------------------------------------------------------------------------
 
-def _score_one(agent, response_text: str, wp: WritingPrompt) -> float:
-    """Score one solver response against all WritingPrompt criteria; return avg (1–10)."""
+def _score_one(agent, response_text: str, wp: WritingPrompt) -> Tuple[float, str]:
+    """Score one solver response against all WritingPrompt criteria.
+
+    Returns (avg_score_1_to_10, failure_reason). avg_score is 0.0 whenever
+    failure_reason != "ok".
+    """
+    if not response_text.strip():
+        return 0.0, "empty_answer"
     try:
         criterion_scores = agent.score_all_criteria(
             content={"response": response_text},
             query=wp.query,
             criteria=wp.criteria,
         )
-        valid = [
-            v["score"]
-            for v in criterion_scores.values()
-            if isinstance(v.get("score"), (int, float)) and v["score"] > 0
-        ]
-        return mean(valid) if valid else 0.0
+    except JudgeInputError as e:
+        print(f"[creative_solver_caller] invalid_criteria: {e}", flush=True)
+        return 0.0, "invalid_criteria"
+    except JudgeAPIError as e:
+        reason = "judge_rate_limit" if e.status_code == 429 else "judge_api_error"
+        print(f"[creative_solver_caller] {reason}: {e}", flush=True)
+        return 0.0, reason
+    except JudgeParseError as e:
+        print(f"[creative_solver_caller] judge_parse_fail: {e}", flush=True)
+        return 0.0, "judge_parse_fail"
     except Exception as e:
         print(f"[creative_solver_caller] scoring failed: {e}", flush=True)
-        return 0.0
+        return 0.0, "judge_api_error"
+
+    valid = [
+        v["score"]
+        for v in criterion_scores.values()
+        if isinstance(v.get("score"), (int, float)) and v["score"] > 0
+    ]
+    if not valid:
+        return 0.0, "judge_parse_fail"
+    return mean(valid), "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -276,10 +309,12 @@ def compute_score(
     # ------------------------------------------------------------------ #
     # Step 1b — language filter: skip non-English solver responses        #
     # ------------------------------------------------------------------ #
+    failure_reasons: List[str] = [""] * n_samples
     language_filtered: set = set()
     for i, pred in enumerate(predicts):
         if not is_english_output(pred):
             language_filtered.add(i)
+            failure_reasons[i] = "language_filter"
             print(
                 f"[creative_solver_caller] non-English response at idx={i}, assigning zero reward",
                 flush=True,
@@ -310,13 +345,14 @@ def compute_score(
             for future in as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 try:
-                    raw_scores[idx] = future.result()
+                    raw_scores[idx], failure_reasons[idx] = future.result()
                 except Exception as e:
                     print(
                         f"[creative_solver_caller] future failed idx={idx}: {e}",
                         flush=True,
                     )
                     raw_scores[idx] = 0.0
+                    failure_reasons[idx] = "judge_api_error"
     else:
         max_workers = 0
 
@@ -394,6 +430,12 @@ def compute_score(
                 key = domain_name.lower().replace(" ", "_")
                 log_dict[f"solver/domain/{key}/mean_raw_score"] = mean(scores)
 
+            reason_counts: dict = defaultdict(int)
+            for reason in failure_reasons:
+                reason_counts[reason] += 1
+            for reason, count in reason_counts.items():
+                log_dict[f"solver/failure_reason/{reason}"] = count
+
             wb.log(log_dict, step=_solver_step)
     except Exception as _wb_err:
         print(f"[creative_solver_caller] W&B logging failed: {_wb_err}", flush=True)
@@ -402,7 +444,7 @@ def compute_score(
     # Step 6 — per-rollout JSONL logging                                  #
     # ------------------------------------------------------------------ #
     try:
-        _log_solver_rollouts(groups, raw_scores, rewards)
+        _log_solver_rollouts(groups, raw_scores, failure_reasons, rewards)
     except Exception as _log_err:
         print(f"[creative_solver_caller] rollout logging failed: {_log_err}", flush=True)
 

@@ -29,7 +29,7 @@ import json
 import os
 import sys
 import requests
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from statistics import mean
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -45,6 +45,19 @@ os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 from question_generate.one_shot_creative_question_generate import FormatValidator, WritingPrompt
 from evaluation.shared.rewards import compute_writing_reward
 from evaluation.shared.utilities import split_thinking
+from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
+
+# failure_reason taxonomy — every sample gets exactly one:
+#   ok                         — scored normally
+#   challenger_format_invalid  — <output>…</output> JSON never parsed
+#   solver_api_error           — challenger parsed fine, but the vLLM solver
+#                                 batch call failed (no solver_text to score)
+#   empty_answer               — solver responded but with empty text
+#   invalid_criteria           — wp.criteria was missing a required field
+#                                 (data bug, not a judge failure)
+#   judge_parse_fail           — judge responded every retry but never parsed
+#   judge_rate_limit           — judge call failed with HTTP 429
+#   judge_api_error            — judge call failed (network/5xx)
 
 # Solver server config (GPU 7, started by creative_challenger_smoke.sh)
 _SOLVER_PORT       = int(os.environ.get("CREATIVE_SOLVER_PORT", "5000"))
@@ -112,6 +125,7 @@ def _log_challenger_rollouts(
     solver_texts: Dict[int, str],
     solver_thinking: Dict[int, str],
     scores: List[Dict[str, float]],
+    failure_reasons: List[str],
 ) -> None:
     global _challenger_step
     _challenger_step += 1
@@ -136,6 +150,7 @@ def _log_challenger_rollouts(
             "overall":              round(scores[idx].get("overall", 0.0), 4),
             "format":               round(scores[idx].get("format",  0.0), 4),
             "accuracy":             round(scores[idx].get("accuracy", 0.0), 4),
+            "failure_reason":       failure_reasons[idx],
         }
         entries.append(json.dumps(entry))
 
@@ -216,20 +231,39 @@ def _score_one(
     agent,
     solver_text: str,
     prompt: WritingPrompt,
-) -> Dict[str, float]:
-    """Score one solver response against its criteria; returns reward dict."""
+) -> Tuple[Dict[str, float], str]:
+    """Score one solver response against its criteria.
+
+    Returns (reward_dict, failure_reason). reward_dict's overall/accuracy are
+    0.0 whenever failure_reason != "ok".
+    """
+    if not solver_text.strip():
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, "empty_answer"
     try:
         criterion_scores = agent.score_all_criteria(
             content={"response": solver_text},
             query=prompt.query,
             criteria=prompt.criteria,
         )
-        valid = [v["score"] for v in criterion_scores.values() if v.get("score", 0) > 0]
-        avg   = mean(valid) if valid else 0.0
-        return compute_writing_reward(avg_score=avg, format_valid=True)
+    except JudgeInputError as e:
+        print(f"[creative_writing_caller] invalid_criteria: {e}", flush=True)
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, "invalid_criteria"
+    except JudgeAPIError as e:
+        reason = "judge_rate_limit" if e.status_code == 429 else "judge_api_error"
+        print(f"[creative_writing_caller] {reason}: {e}", flush=True)
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, reason
+    except JudgeParseError as e:
+        print(f"[creative_writing_caller] judge_parse_fail: {e}", flush=True)
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, "judge_parse_fail"
     except Exception as e:
         print(f"[creative_writing_caller] scoring failed: {e}", flush=True)
-        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, "judge_api_error"
+
+    valid = [v["score"] for v in criterion_scores.values() if v.get("score", 0) > 0]
+    if not valid:
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, "judge_parse_fail"
+    avg = mean(valid)
+    return compute_writing_reward(avg_score=avg, format_valid=True), "ok"
 
 
 def compute_score(
@@ -255,20 +289,27 @@ def compute_score(
     # remaining field extraction with safe defaults.
     parsed: List[Optional[WritingPrompt]] = []
     challenger_thinking: List[str] = []
-    for predict in predicts:
+    failure_reasons: List[str] = ["ok"] * len(predicts)
+    for i, predict in enumerate(predicts):
         thinking, answer = split_thinking(predict)
         challenger_thinking.append(thinking)
         fmt, p = FormatValidator.validate_response(answer)
         if fmt != 1:
             parsed.append(None)
+            failure_reasons[i] = "challenger_format_invalid"
             continue
         try:
             wp = WritingPrompt.from_dict(p)
         except Exception as e:
             print(f"[creative_writing_caller] WritingPrompt.from_dict failed: {e}", flush=True)
             parsed.append(None)
+            failure_reasons[i] = "challenger_format_invalid"
             continue
-        parsed.append(wp if wp.query.strip() and wp.criteria else None)
+        if wp.query.strip() and wp.criteria:
+            parsed.append(wp)
+        else:
+            parsed.append(None)
+            failure_reasons[i] = "challenger_format_invalid"
 
     # --- Step 2: batch vLLM query for all valid predicts ---
     valid_idx     = [i for i, wp in enumerate(parsed) if wp is not None]
@@ -297,6 +338,7 @@ def compute_score(
     for idx in valid_idx:
         if idx not in solver_texts:
             scores[idx] = {"overall": 0.0, "format": 1.0, "accuracy": 0.0}
+            failure_reasons[idx] = "solver_api_error"
 
     # to_score entries: (list_index, solver_response_text, WritingPrompt)
     # _score_one receives the WritingPrompt and accesses .query / .criteria internally.
@@ -313,10 +355,13 @@ def compute_score(
                 for idx, solver_text, prompt in to_score
             }
             for future in as_completed(futures):
-                scores[futures[future]] = future.result()
+                idx = futures[future]
+                scores[idx], failure_reasons[idx] = future.result()
 
     try:
-        _log_challenger_rollouts(parsed, challenger_thinking, solver_texts, solver_thinking, scores)
+        _log_challenger_rollouts(
+            parsed, challenger_thinking, solver_texts, solver_thinking, scores, failure_reasons
+        )
     except Exception as _log_err:
         print(f"[creative_writing_caller] rollout logging failed: {_log_err}", flush=True)
 
@@ -332,7 +377,7 @@ def compute_score(
             criteria_counts = [
                 len(parsed[i].criteria) for i in valid_idx if parsed[i] is not None
             ]
-            wb.log({
+            log_dict = {
                 "challenger/format_valid_rate":   n_valid  / n_total  if n_total  else 0.0,
                 "challenger/solver_success_rate": n_solved / n_valid  if n_valid  else 0.0,
                 "challenger/mean_overall_reward": mean(overall_vals),
@@ -340,7 +385,14 @@ def compute_score(
                 "challenger/mean_criteria_count": mean(criteria_counts) if criteria_counts else 0.0,
                 "challenger/num_valid":           n_valid,
                 "challenger/num_samples":         n_total,
-            }, step=_challenger_step)
+            }
+            reason_counts: Dict[str, int] = {}
+            for reason in failure_reasons:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            for reason, count in reason_counts.items():
+                log_dict[f"challenger/failure_reason/{reason}"] = count
+
+            wb.log(log_dict, step=_challenger_step)
     except Exception as _wb_err:
         print(f"[creative_writing_caller] W&B logging failed: {_wb_err}", flush=True)
 
