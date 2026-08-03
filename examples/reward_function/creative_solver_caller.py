@@ -66,6 +66,23 @@ from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
 # Raise via CREATIVE_SCORER_MAX_WORKERS if your API tier allows more.
 _MAX_WORKERS = int(os.environ.get("CREATIVE_SCORER_MAX_WORKERS", "4"))
 
+# Solver responses have no required format (format is always 1.0 for
+# pre-validated data), so a truncated response is still scoreable — it just
+# might read as truncated to the judge. Tracked as an additive `truncated`
+# flag alongside failure_reason rather than a failure_reason value of its
+# own, since it does not by itself mean the sample was not scored.
+_SOLVER_MAX_RESPONSE_LENGTH = int(os.environ.get("SOLVER_MAX_RESPONSE_LENGTH", "4096"))
+_TRUNCATION_MARGIN_TOKENS = int(os.environ.get("TRUNCATION_MARGIN_TOKENS", "16"))
+_APPROX_CHARS_PER_TOKEN = 3.5  # rough heuristic — no tokenizer call per sample
+
+
+def _looks_truncated(text: str, max_response_length: int) -> bool:
+    """Best-effort truncation detector from decoded text alone (character
+    length as a proxy for token count, since compute_score never sees raw
+    token counts)."""
+    approx_tokens = len(text) / _APPROX_CHARS_PER_TOKEN
+    return approx_tokens >= max_response_length - _TRUNCATION_MARGIN_TOKENS
+
 # Two independent, configurable gates that skip ranking a group instead of
 # ranking noise. Both assign a *uniform* reward across the group — zero GRPO
 # advantage either way — so their job is bookkeeping + skipping noise-ranking,
@@ -98,6 +115,9 @@ _LOW_QUALITY_THRESHOLD = float(os.environ.get("CREATIVE_LOW_QUALITY_THRESHOLD", 
 #   num_criteria  — len(wp.criteria)
 #   response_preview — first 400 chars of the solver's rollout response
 #   raw_score     — avg criterion score 1–10 from Claude
+#   failure_reason — see taxonomy above _score_one
+#   truncated     — response length is within a few tokens of
+#                   SOLVER_MAX_RESPONSE_LENGTH (best-effort, char-based proxy)
 #   rank_reward   — normalised rank reward [0, 1] (GRPO signal)
 #   accuracy      — raw_score / 10  (logged metric)
 #
@@ -111,6 +131,7 @@ def _log_solver_rollouts(
     groups: "OrderedDict[str, dict]",
     raw_scores: List[float],
     failure_reasons: List[str],
+    truncated_flags: List[bool],
     rewards: List[Dict[str, float]],
 ) -> None:
     global _solver_step
@@ -137,6 +158,7 @@ def _log_solver_rollouts(
                 "response_preview": response_text[:400],
                 "raw_score":        round(raw_scores[idx], 4),
                 "failure_reason":   failure_reasons[idx],
+                "truncated":        truncated_flags[idx],
                 "rank_reward":      round(rewards[idx].get("overall", 0.0), 4),
                 "accuracy":         round(rewards[idx].get("accuracy", 0.0), 4),
             }))
@@ -324,6 +346,10 @@ def compute_score(
             groups[key] = {"wp": wp, "samples": []}
         groups[key]["samples"].append((i, pred))
 
+    truncated_flags: List[bool] = [
+        _looks_truncated(pred, _SOLVER_MAX_RESPONSE_LENGTH) for pred in predicts
+    ]
+
     # ------------------------------------------------------------------ #
     # Step 1b — language filter: skip non-English solver responses        #
     # ------------------------------------------------------------------ #
@@ -461,6 +487,8 @@ def compute_score(
                 "solver/pct_low_quality_groups": n_low_quality_groups / n_groups if n_groups else 0.0,
                 "solver/num_language_filtered":  len(language_filtered),
                 "solver/pct_language_filtered":  len(language_filtered) / n_samples if n_samples else 0.0,
+                "solver/num_truncated":          sum(truncated_flags),
+                "solver/pct_truncated":          sum(truncated_flags) / n_samples if n_samples else 0.0,
             }
             for domain_name, scores in domain_raw.items():
                 key = domain_name.lower().replace(" ", "_")
@@ -480,7 +508,7 @@ def compute_score(
     # Step 6 — per-rollout JSONL logging                                  #
     # ------------------------------------------------------------------ #
     try:
-        _log_solver_rollouts(groups, raw_scores, failure_reasons, rewards)
+        _log_solver_rollouts(groups, raw_scores, failure_reasons, truncated_flags, rewards)
     except Exception as _log_err:
         print(f"[creative_solver_caller] rollout logging failed: {_log_err}", flush=True)
 

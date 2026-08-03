@@ -49,7 +49,11 @@ from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
 
 # failure_reason taxonomy — every sample gets exactly one:
 #   ok                         — scored normally
-#   challenger_format_invalid  — <output>…</output> JSON never parsed
+#   truncated                  — <output>…</output> JSON never parsed, and the
+#                                 response looks cut off by max_response_length
+#                                 (model "couldn't finish", not "wrote garbage")
+#   challenger_format_invalid  — <output>…</output> JSON never parsed, and it
+#                                 does not look truncated
 #   solver_api_error           — challenger parsed fine, but the vLLM solver
 #                                 batch call failed (no solver_text to score)
 #   empty_answer               — solver responded but with empty text
@@ -62,6 +66,27 @@ from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
 # Solver server config (GPU 7, started by creative_challenger_smoke.sh)
 _SOLVER_PORT       = int(os.environ.get("CREATIVE_SOLVER_PORT", "5000"))
 _SOLVER_MAX_TOKENS = int(os.environ.get("CREATIVE_SOLVER_MAX_TOKENS", "32768"))
+
+# The challenger's own generation budget (worker.rollout / data.max_response_length
+# in creative_challenger_smoke.sh) — used only to approximate truncation from
+# decoded text, since compute_score never sees raw token counts.
+_CHALLENGER_MAX_RESPONSE_LENGTH = int(os.environ.get("CHALLENGER_MAX_RESPONSE_LENGTH", "4096"))
+_TRUNCATION_MARGIN_TOKENS = int(os.environ.get("TRUNCATION_MARGIN_TOKENS", "16"))
+# Rough English/code heuristic — no tokenizer call per sample. Good enough to
+# separate "ran out of budget" from "wrote malformed JSON with room to spare".
+_APPROX_CHARS_PER_TOKEN = 3.5
+
+
+def _looks_truncated(text: str, max_response_length: int) -> bool:
+    """Best-effort truncation detector from decoded text alone.
+
+    True when the response is within a few tokens' worth of characters of
+    max_response_length, or an <output> block was opened but never closed.
+    """
+    approx_tokens = len(text) / _APPROX_CHARS_PER_TOKEN
+    if approx_tokens >= max_response_length - _TRUNCATION_MARGIN_TOKENS:
+        return True
+    return "<output>" in text and "</output>" not in text
 
 # Qwen3 thinking-mode sampling best practices (generation_config.json defaults).
 # DO NOT use greedy decoding — it causes repetition/degradation in thinking mode.
@@ -296,7 +321,11 @@ def compute_score(
         fmt, p = FormatValidator.validate_response(answer)
         if fmt != 1:
             parsed.append(None)
-            failure_reasons[i] = "challenger_format_invalid"
+            failure_reasons[i] = (
+                "truncated"
+                if _looks_truncated(predict, _CHALLENGER_MAX_RESPONSE_LENGTH)
+                else "challenger_format_invalid"
+            )
             continue
         try:
             wp = WritingPrompt.from_dict(p)

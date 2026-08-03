@@ -173,6 +173,13 @@ VAL_PARQUET="${STORAGE_PATH}/creative_smoke/${Model_abbr}_val.parquet"
 # Tell the reward function which JSONL file to write rollout logs to.
 export VERL_EXPERIMENT_NAME="$SAVE_NAME"
 
+# Bumped from 2048: that budget was truncating the <output> JSON block often
+# enough to be indistinguishable from genuine format failures. Exported so
+# creative_writing_caller.py's truncation heuristic uses the same number
+# VERL is actually generating with.
+CHALLENGER_MAX_RESPONSE_LENGTH="${CHALLENGER_MAX_RESPONSE_LENGTH:-4096}"
+export CHALLENGER_MAX_RESPONSE_LENGTH
+
 CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main \
     config=examples/config.yaml \
     data.train_files="$TRAIN_PARQUET" \
@@ -181,7 +188,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main \
     data.answer_key=answer \
     data.format_prompt=./examples/format_prompt/creative.jinja \
     data.max_prompt_length=2048 \
-    data.max_response_length=2048 \
+    data.max_response_length="$CHALLENGER_MAX_RESPONSE_LENGTH" \
     data.rollout_batch_size="$ROLLOUT_BATCH" \
     data.val_batch_size="$num_val" \
     worker.actor.model.model_path="$challenger_model" \

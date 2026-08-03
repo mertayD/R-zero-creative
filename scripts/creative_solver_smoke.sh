@@ -225,6 +225,11 @@ VAL_PARQUET="${STORAGE_PATH}/creative_smoke/${Model_abbr}_solver_val.parquet"
 # Tell the reward function which JSONL file to write rollout logs to.
 export VERL_EXPERIMENT_NAME="$SAVE_NAME"
 
+# Exported so creative_solver_caller.py's truncation heuristic uses the same
+# number VERL is actually generating with.
+SOLVER_MAX_RESPONSE_LENGTH="${SOLVER_MAX_RESPONSE_LENGTH:-4096}"
+export SOLVER_MAX_RESPONSE_LENGTH
+
 CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main \
     config=examples/config.yaml \
     data.train_files="$TRAIN_PARQUET" \
@@ -233,7 +238,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python3 -m verl.trainer.main \
     data.answer_key=answer \
     data.format_prompt=./examples/format_prompt/creative.jinja \
     data.max_prompt_length=2048 \
-    data.max_response_length=4096 \
+    data.max_response_length="$SOLVER_MAX_RESPONSE_LENGTH" \
     data.rollout_batch_size="$ROLLOUT_BATCH" \
     data.val_batch_size="$num_val" \
     worker.actor.model.model_path="$solver_model" \
