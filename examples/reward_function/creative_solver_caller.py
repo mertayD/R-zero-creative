@@ -118,6 +118,13 @@ _LOW_QUALITY_THRESHOLD = float(os.environ.get("CREATIVE_LOW_QUALITY_THRESHOLD", 
 #   failure_reason — see taxonomy above _score_one
 #   truncated     — response length is within a few tokens of
 #                   SOLVER_MAX_RESPONSE_LENGTH (best-effort, char-based proxy)
+#   is_low_quality — group-level flag: every scoreable sample in this
+#                   prompt's group scored <= _LOW_QUALITY_THRESHOLD, so the
+#                   group got a uniform 0.5 reward instead of being ranked.
+#                   Distinguishes "scored fine but uniformly bad content"
+#                   from a genuine all_failed collapse (rank_reward == 0.0),
+#                   since both would otherwise look identical to a consumer
+#                   only checking failure_reason. See select_checkpoint.py.
 #   rank_reward   — normalised rank reward [0, 1] (GRPO signal)
 #   accuracy      — raw_score / 10  (logged metric)
 #
@@ -133,6 +140,7 @@ def _log_solver_rollouts(
     failure_reasons: List[str],
     truncated_flags: List[bool],
     rewards: List[Dict[str, float]],
+    low_quality_groups: Dict[str, bool],
 ) -> None:
     global _solver_step
     _solver_step += 1
@@ -144,7 +152,7 @@ def _log_solver_rollouts(
     log_path = os.path.join(log_dir, f"{exp_name}.jsonl")
 
     entries: List[str] = []
-    for group in groups.values():
+    for prompt_id, group in groups.items():
         wp: WritingPrompt = group["wp"]
         for idx, response_text in group["samples"]:
             entries.append(json.dumps({
@@ -159,6 +167,7 @@ def _log_solver_rollouts(
                 "raw_score":        round(raw_scores[idx], 4),
                 "failure_reason":   failure_reasons[idx],
                 "truncated":        truncated_flags[idx],
+                "is_low_quality": low_quality_groups.get(prompt_id, False),
                 "rank_reward":      round(rewards[idx].get("overall", 0.0), 4),
                 "accuracy":         round(rewards[idx].get("accuracy", 0.0), 4),
             }))
@@ -421,8 +430,9 @@ def compute_score(
     rewards: List[Dict[str, float]] = [{} for _ in range(n_samples)]
     n_all_failed_groups: int = 0
     n_low_quality_groups: int = 0
+    low_quality_groups: Dict[str, bool] = {}
 
-    for group in groups.values():
+    for prompt_id, group in groups.items():
         # G_eff = actual number of rollouts received for this prompt
         eval_scores_group: Dict[int, float] = {
             idx: raw_scores[idx]
@@ -437,6 +447,7 @@ def compute_score(
         low_quality = (
             bool(scoreable) and not all_failed and max(scoreable.values()) <= _LOW_QUALITY_THRESHOLD
         )
+        low_quality_groups[prompt_id] = low_quality
 
         if all_failed:
             n_all_failed_groups += 1
@@ -514,7 +525,9 @@ def compute_score(
     # Step 6 — per-rollout JSONL logging                                  #
     # ------------------------------------------------------------------ #
     try:
-        _log_solver_rollouts(groups, raw_scores, failure_reasons, truncated_flags, rewards)
+        _log_solver_rollouts(
+            groups, raw_scores, failure_reasons, truncated_flags, rewards, low_quality_groups
+        )
     except Exception as _log_err:
         print(f"[creative_solver_caller] rollout logging failed: {_log_err}", flush=True)
 
