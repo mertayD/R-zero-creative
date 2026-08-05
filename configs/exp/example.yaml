@@ -1,0 +1,7 @@
+# Minimal experiment override — everything else comes from configs/base.yaml.
+run:
+  abbr: example
+challenger:
+  model_path: Qwen/Qwen3-4B
+solver:
+  model_path: Qwen/Qwen3-4B
