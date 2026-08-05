@@ -1,0 +1,204 @@
+# =============================================================================
+# configs/base.yaml — full set of defaults for creative-writing co-evolution
+# training. Every key the pipeline needs is written out explicitly here.
+#
+# Structure:
+#   run        — identifies a single training run (name, size, seed)
+#   challenger — settings for training the prompt-generating model
+#   solver     — settings for training the prompt-answering model
+#   judge      — the LLM judge shared by both reward pipelines
+#   rewards    — which reward formula each role uses
+#   verl       — the underlying trainer's own config, unchanged in shape
+#
+# `null` marks a value that is set per run (model paths, dataset paths,
+# checkpoint names) rather than a fixed default.
+# =============================================================================
+
+# The small set of values that make one launch distinguishable from the next.
+run:
+  abbr: null              # short name used to build checkpoint/run directory names — required, set per run
+  profile: smoke           # smoke | small | full — controls run size (steps, batch sizes, judge concurrency)
+  seed: 42                 # shared seed for domain sampling, prompt generation, and dataset shuffling
+
+# ---------------------------------------------------------------------------
+# Challenger role — trains the model that generates creative-writing prompts
+# (with grading criteria) for the solver to answer.
+# ---------------------------------------------------------------------------
+challenger:
+  model_path: null              # HF id or local path of the model being trained — required, set per run
+  max_steps: 4                   # number of GRPO training steps before stopping
+  rollout_n: 4                    # G — prompts generated per training example, used to estimate the GRPO advantage
+  num_train: 8                    # number of training examples per step
+  num_val: 2                      # number of validation examples per step
+  max_response_length: 4096       # generation budget in tokens, sized to comfortably fit the <output> JSON block without truncating
+  # Sampling config for querying the frozen solver oracle over HTTP to answer
+  # challenger-written prompts — separate from worker.rollout below, which
+  # controls the challenger's own generation.
+  solver_query:
+    port: 5000                    # local port the solver's vLLM server listens on
+    max_tokens: 32768              # generation budget for the solver's response, including any thinking tokens
+    # Qwen3 thinking-mode recommended sampling parameters. Greedy decoding is
+    # avoided here — it causes repetition/degradation in thinking mode.
+    temperature: 0.6
+    top_p: 0.95
+    top_k: 20
+    min_p: 0.0
+
+# ---------------------------------------------------------------------------
+# Solver role — trains the model that answers creative-writing prompts. Each
+# of its samples for a prompt is judged and ranked against the others.
+# ---------------------------------------------------------------------------
+solver:
+  model_path: null              # HF id or local path of the model being trained — required, set per run
+  max_steps: 4                   # number of GRPO training steps before stopping
+  rollout_n: 4                    # G — independent responses generated per prompt; needs to be >= 2 for a meaningful rank comparison
+  num_train: 8                    # number of training prompts per step
+  num_val: 2                      # number of validation prompts per step
+  max_response_length: 4096       # generation budget in tokens for a solver response
+
+# ---------------------------------------------------------------------------
+# Judge — the Claude judge that scores every rollout against its criteria,
+# shared by both the challenger and solver reward pipelines.
+# ---------------------------------------------------------------------------
+judge:
+  type: claude                    # claude | mock — mock returns deterministic scores for offline testing without API calls
+  model: claude-sonnet-5           # judge model id
+  max_tokens: 8192                  # max tokens per judge response
+  http_max_retry_attempts: 5        # network-level retries before a judge call is treated as failed
+  max_workers: 4                     # max concurrent judge calls, capped to stay under the API's requests-per-minute limit
+  truncation_margin_tokens: 16       # how close a response's length must be to its role's max_response_length before it's flagged as possibly truncated
+  low_quality_threshold: 2.0          # raw judge score (1-10 scale) at or below which a group of samples is too uniformly bad to rank meaningfully — the group gets a neutral reward instead
+
+# ---------------------------------------------------------------------------
+# Reward strategy selection — which reward formula each role uses. New
+# formulas are added to the registry and referenced here by name.
+# ---------------------------------------------------------------------------
+rewards:
+  solver:
+    type: rank                      # each sample is judged, then ranked against the other samples for the same prompt; reward is its normalized rank position
+  challenger:
+    type: uncertainty                # rewards prompts the solver is maximally uncertain about (judged score near the midpoint of the scale); prompts the solver aces or fails outright score near zero
+
+# ---------------------------------------------------------------------------
+# verl — the trainer's own config, passed through to verl.trainer.main
+# unchanged in shape.
+# ---------------------------------------------------------------------------
+verl:
+  # What the model reads and how a training batch is built: input/output
+  # columns, prompt template, token budgets, and shuffling.
+  data:
+    train_files: null                  # path to this run's training parquet — set by the run launcher
+    val_files: null                     # path to this run's validation parquet — set by the run launcher
+    prompt_key: problem                  # parquet column holding the input prompt text
+    answer_key: answer                   # parquet column holding the reference text passed to the reward function
+    image_key: images                    # parquet column for image data — unused, creative writing is text-only
+    max_prompt_length: 2048               # maximum tokenized prompt length allowed
+    max_response_length: null            # maximum generation length in tokens — role-specific, see challenger/solver above
+    rollout_batch_size: null             # prompts sampled per training step — role-specific, see challenger/solver num_train above
+    val_batch_size: null                 # prompts sampled per validation step — role-specific, see challenger/solver num_val above
+    # Passed straight through unmodified — the WritingPrompt query already
+    # carries its own full instructions, so no extra formatting is needed.
+    format_prompt: ./examples/format_prompt/creative.jinja
+    override_chat_template: null          # override the model's own tokenizer chat template; unset uses the model's default
+    apply_chat_template_kwargs: {}         # extra kwargs forwarded to tokenizer.apply_chat_template, e.g. {enable_thinking: true} to turn on Qwen3 thinking mode
+    shuffle: true                          # shuffle dataset order each epoch
+    seed: null                             # shuffle seed — kept equal to run.seed so one seed controls every source of randomness in a run
+    max_pixels: 4194304                     # image size cap — unused, no images in creative writing
+    min_pixels: 262144                      # image size floor — unused, same
+    filter_overlong_prompts: true            # drop prompts that exceed max_prompt_length instead of truncating them
+
+  # GRPO advantage estimation and the KL penalty against the reference policy.
+  algorithm:
+    adv_estimator: grpo               # advantage estimator used for the policy update
+    disable_kl: false                  # apply a KL penalty against the reference policy
+    use_kl_loss: true                   # add the KL term directly to the loss, rather than only folding it into the reward
+    kl_penalty: low_var_kl               # estimator used to compute the KL term (lower variance than the naive estimator)
+    kl_coef: 1.0e-2                       # weight of the KL penalty — higher keeps the policy closer to the reference model, lower allows more exploration
+    mock_data: test                        # unused by the trainer; kept only for schema completeness
+
+  # Everything that runs on the GPU workers: the model being trained, its
+  # rollout/generation settings, the frozen reference model, and how
+  # rollouts get turned into a reward.
+  worker:
+    # The model being optimized — batch sizes, sharding, optimizer, and
+    # memory settings for the training step.
+    actor:
+      global_batch_size: null             # samples per optimizer step — role-specific, see challenger/solver num_train above
+      micro_batch_size_per_device_for_update: 1        # per-device micro-batch size during the backward/update pass
+      micro_batch_size_per_device_for_experience: 1     # per-device micro-batch size during the forward/log-prob pass
+      max_grad_norm: 1.0                    # gradient clipping threshold
+      padding_free: true                     # pack variable-length sequences without padding, more compute-efficient
+      ulysses_sequence_parallel_size: 1       # sequence-parallel degree; 1 disables it
+      use_torch_compile: false                 # disabled — creative rollout lengths vary too much for the compiled graph cache to help
+      model:
+        model_path: null                        # HF id or local path — role-specific, see challenger/solver model_path above
+        enable_gradient_checkpointing: true       # trade compute for memory during backprop
+        trust_remote_code: false                   # don't execute custom modeling code shipped with the checkpoint
+        freeze_vision_tower: false                  # unused — text-only
+      optim:
+        lr: 1.0e-6                             # learning rate
+        weight_decay: 1.0e-2                     # weight decay
+        strategy: adamw                           # optimizer algorithm — {adamw, adamw_bf16}
+        lr_warmup_ratio: 0.0                       # fraction of training spent warming up the learning rate
+      fsdp:
+        enable_full_shard: true                  # fully shard model parameters across data-parallel ranks
+        enable_cpu_offload: false                 # keep sharded parameters on GPU rather than offloading to CPU
+        enable_rank0_init: true                    # initialize the model on rank 0 then broadcast, avoiding redundant loads
+      offload:
+        offload_params: true                     # move parameters to CPU when not in use — trades speed for GPU memory
+        offload_optimizer: true                    # move optimizer state to CPU when not in use — same trade-off
+
+    # How the model's own rollouts are sampled during training — this
+    # generation is what the reward functions grade.
+    rollout:
+      n: null                              # G — samples per training prompt, role-specific, see challenger/solver rollout_n above
+      # Close to unmodified-distribution sampling (top_p=0.99 barely trims
+      # the tail). Kept high deliberately: both the rank reward and the
+      # uncertainty reward need the G samples for a prompt to actually differ
+      # from each other — a low temperature collapses them toward
+      # near-identical outputs, which starves the reward signal (more ties
+      # for rank, less spread for uncertainty) rather than improving quality.
+      temperature: 1.0
+      top_p: 0.99
+      gpu_memory_utilization: 0.7            # fraction of GPU memory vLLM may reserve for the rollout KV cache
+      enforce_eager: true                     # disable CUDA graph capture — needed to run the rollout engine alongside training on the same GPUs
+      enable_chunked_prefill: false             # process each prompt's prefill in one pass rather than chunks
+      tensor_parallel_size: 2                    # vLLM tensor-parallel degree for rollout generation
+      limit_images: 0                              # unused — text-only
+      val_override_config:
+        temperature: 1.0                           # sampling temperature used only for validation rollouts (moot while trainer.val_freq is -1 below)
+        n: 1                                         # samples per prompt during validation
+
+    # A frozen copy of the policy from the start of training, used only to
+    # compute the KL penalty above — never updated, only loaded.
+    ref:
+      fsdp:
+        enable_full_shard: true
+        enable_cpu_offload: true               # offloaded to CPU since the reference model doesn't need to stay resident for the update step
+        enable_rank0_init: true
+      offload:
+        offload_params: true
+
+    # Connects verl to the reward code: how rollouts become a training signal.
+    reward:
+      reward_type: batch                # the reward function receives the whole batch of rollouts at once, since rank/uncertainty rewards are computed relative to a group, not per-sample
+      reward_function: ./creative_rzero/rewards/verl_entry.py:compute_score   # entrypoint verl calls to score a batch; reads rewards.solver.type / rewards.challenger.type above to pick the active reward formula
+
+  # Run-level control: how long to train, how often to checkpoint/validate,
+  # and where to log.
+  trainer:
+    total_epochs: 1000                       # epoch cap — effectively unused, max_steps below is the real stop condition
+    max_steps: null                           # total GRPO steps to run — role-specific, see challenger/solver max_steps above
+    project_name: r-zero-creative              # W&B project name
+    experiment_name: null                        # W&B run name / checkpoint directory name for this run — set by the run launcher
+    logger: ["console", "wandb"]                  # where training metrics are logged
+    nnodes: 1                                       # number of machines used for training
+    n_gpus_per_node: 4                               # GPUs dedicated to the training process; the remaining GPUs on the node are reserved for the frozen judge/solver oracle
+    val_freq: -1                                      # steps between validation passes — -1 disables periodic validation
+    val_before_train: true                              # run one validation pass before training starts (moot while val_freq is -1)
+    val_only: false                                       # skip training and only run validation
+    val_generations_to_log: 3                              # number of validation samples logged for inspection (moot while val_freq is -1)
+    save_freq: 1                                             # checkpoint every N steps
+    save_limit: 3                                             # maximum checkpoints kept on disk before older ones are pruned
+    save_checkpoint_path: null                                 # directory checkpoints are written to — set by the run launcher
+    load_checkpoint_path: null                                  # checkpoint to resume training from; unset starts fresh
