@@ -243,7 +243,13 @@ Per-task format: **Pointers** (files/functions/lines as of today) · **Do** · *
 - Accept: run dir contains the YAML verl actually consumed; a run can be reproduced by pointing at that file alone.
 
 **T2.7 — `steps/merge_ckpt.py`** with T1.11's health-based step selection built in.
-- Accept: returns the merged HF dir path; refuses (with override flag) to merge a step flagged as collapsed.
+- **Collapse definition** (requires T1.4 reason codes): split per-step zero-group causes into `infra = {judge_api_error, judge_rate_limit}` (harmless to the checkpoint — zero reward ⇒ zero advantage) vs. `policy = {language_filter, empty_answer, truncated, all-scores-at-floor}`. Only policy-attributable failure vetoes a checkpoint.
+  - *Hard flag:* policy-attributable zero-group rate > 50% at any step.
+  - *Soft flag (ramp):* 3 consecutive steps with rate > 2× run baseline (steps 1–3) and monotonically worsening. (On the observed iter-1 run this fires at step ~17–18, before the step-19 cliff.)
+  - Supporting signals, all free: mean raw score, median response length, truncation %, CJK %, distinct-2-gram ratio from the JSONL; entropy / KL / grad-norm from verl's W&B logs.
+  - *Selection:* healthy = unflagged and rate < 10%; merge last healthy step (or best mean raw score among healthy).
+- **Config dependency:** `trainer.save_limit: 3` breaks retrospective selection — the healthy checkpoint may be pruned by the time collapse is detected. Either raise `save_limit` to cover the collapse window, or (preferred) make the monitor **online**: `train_verl.py` tails the rollout JSONL between steps and kills the trainer subprocess when the soft flag trips — last saved checkpoint is then near-healthy by construction, and no compute is spent on doomed steps (iter-1 burned 14 steps of rollouts + judge calls post-collapse).
+- Accept: returns the merged HF dir path; refuses (with override flag) to merge a flagged step; replaying the iter-1 JSONL through the detector flags ≤ step 18 and never selects 19+.
 
 **T2.8 ⛓ — `modal_app.py` thin wrappers; delete creative bash scripts**
 - Pointers: `modal_run.py` L1392–1984 (three creative functions + coevolve, incl. duplicated 10-line env dicts at L1399–1410 and L1550–1561); orchestration logic (state/resume/verify/upload, L1792–1976) moves to `creative_rzero/orchestrator.py` unchanged in behavior.
@@ -272,6 +278,16 @@ Per-task format: **Pointers** (files/functions/lines as of today) · **Do** · *
 **T3.6 — `rewards/verl_entry.py`**: the single `reward_function` target. Reads `EXPERIMENT_CONFIG_PATH`, instantiates the configured strategy once (module-level cache — verl imports the file per worker), delegates `compute_score`. Both roles' verl configs point here; role passed via config, not filename. Accept: switching solver reward rank→zscore = 1-line yaml change, verified in logs.
 
 **T3.7 — `logging_utils.py`**: one JSONL writer (shared schema: step, role, prompt_id, raw_score, reward, failure_reason, preview, truncated) + one W&B helper; delete the two copy-pasted logger/`_get_wandb` implementations. Accept: challenger and solver logs load into the same DataFrame with a `role` column — the per-step health analysis you just ran becomes a reusable `scripts/analyze_run.py`.
+
+**T3.9 — Typed dataclasses for rollout-log entries** *(execution order: do before T3.7 — it defines the schema T3.7's writer consumes)*
+- Pointers: `creative_solver_caller.py::_log_solver_rollouts` (L92–126; schema lives only as a comment block, L67–88) and `creative_writing_caller.py::_log_challenger_rollouts` (L109–144; comment schema L84–105). Both build entries as ad-hoc inline dicts — the schema is enforced by nothing, documented in comments that already drift from the code, and the two files disagree on field names for the same concepts (`response_preview` vs `solver_response`, `raw_score` vs absent, `input_query` vs `generated_query`).
+- Do: in `creative_rzero/logging_utils.py` (or `data_models.py`), define frozen dataclasses:
+  - `RolloutLogEntry` (shared base): `schema_version`, `step`, `role` (`solver|challenger`), `prompt_id`, `rollout_idx`, `raw_score`, `reward`, `accuracy`, `failure_reason` (T1.4), `truncated` (T1.9), `response_preview`, `response_len_tokens`.
+  - `SolverLogEntry(RolloutLogEntry)`: `domain`, `domain_name`, `subdomain`, `num_criteria`, `input_query`.
+  - `ChallengerLogEntry(RolloutLogEntry)`: `format_valid`, `generated_query`, `generated_criteria_n`, `challenger_thinking`, `solver_response`, `solver_thinking`.
+  - One `to_jsonl_line()` / `from_json()` pair (`dataclasses.asdict`); include `schema_version: 1` so the analysis script can handle old logs.
+- Goal: the log schema becomes code, not comments — field renames break at construction time instead of silently producing `NaN` columns in analysis; solver and challenger logs share a common core so per-step health analysis (T2.7 detector, `scripts/analyze_run.py`) works over both with one loader.
+- Accept: both reward strategies construct entries only via these classes (no inline dicts); round-trip test `from_json(to_jsonl_line(e)) == e`; loading a mixed solver+challenger JSONL yields one DataFrame with the shared columns non-null for every row; the T2.7 collapse detector runs off `RolloutLogEntry` fields alone.
 
 **T3.8 — Test suite**: rank math (ties/G=1/all-failed), uncertainty vs. variance formulas on canned score sets, filters (CJK edge cases, truncation detection), `verl_entry` dispatch, config round-trip. Target: the four bug classes already found (H4 scale, H6 ties, env contract, format inheritance) each have a test that would have caught them. Accept: `pytest` green, < 60s, no network.
 
@@ -318,7 +334,7 @@ The no-interim-runs constraint removes all backward-compatibility obligations. C
 ```
 Next:  T3.1 (incl. MockJudge) → T3.2 → T3.3            # judge + registry skeleton
 Then:  T2.5, T2.6 (reward_function → verl_entry), T2.7  # steps, validated via mock
-       T3.4, T3.5 → T3.6, T3.7                          # strategies (port Phase-1 fixes here)
+       T3.4, T3.5 → T3.6, T3.9 → T3.7                   # strategies (port Phase-1 fixes here); T3.9 defines log schema T3.7 writes
        T2.8 (modal_app + orchestrator) + delete old scripts/functions (rev. T4.1)
 Gate:  T3.8 tests + T4.4 dry-run green                  # no GPU spent before this passes
 Then:  T4.3 manifest, T4.5 profiles, T4.2 README

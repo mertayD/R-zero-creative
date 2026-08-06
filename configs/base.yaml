@@ -199,6 +199,6 @@ verl:
     val_only: false                                       # skip training and only run validation
     val_generations_to_log: 3                              # number of validation samples logged for inspection (moot while val_freq is -1)
     save_freq: 1                                             # checkpoint every N steps
-    save_limit: 3                                             # maximum checkpoints kept on disk before older ones are pruned
+    save_limit: -1                                            # -1 = keep every checkpoint; T2.7's health-based step selection is retrospective (steps/merge_ckpt.py) and can pick any earlier step, so pruning would risk selecting one whose weights are already gone
     save_checkpoint_path: null                                 # directory checkpoints are written to — set by the run launcher
     load_checkpoint_path: null                                  # checkpoint to resume training from; unset starts fresh

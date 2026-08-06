@@ -59,6 +59,7 @@ for _p in (_REPO, _WB_DIR):
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 
 from creative_rzero.data.writing_prompt import WritingPrompt
+from creative_rzero.failure_reasons import FailureReason
 from creative_rzero.utils import find_cjk_matches
 from evaluation.shared.utilities import split_thinking
 from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
@@ -216,7 +217,8 @@ def _get_agent():
 # Per-sample scoring
 # ---------------------------------------------------------------------------
 # failure_reason taxonomy — every sample gets exactly one, so distributions
-# like "79% exact zero" become a one-groupby answer instead of a mystery:
+# like "79% exact zero" become a one-groupby answer instead of a mystery.
+# Canonical values live in creative_rzero/failure_reasons.py:FailureReason —
 #   ok                — scored normally
 #   empty_answer      — response text was empty, nothing to grade
 #   invalid_criteria  — wp.criteria was missing a required field (data bug,
@@ -231,10 +233,10 @@ def _score_one(agent, response_text: str, wp: WritingPrompt) -> Tuple[float, str
     """Score one solver response against all WritingPrompt criteria.
 
     Returns (avg_score_1_to_10, failure_reason). avg_score is 0.0 whenever
-    failure_reason != "ok".
+    failure_reason != FailureReason.OK.
     """
     if not response_text.strip():
-        return 0.0, "empty_answer"
+        return 0.0, FailureReason.EMPTY_ANSWER.value
     try:
         criterion_scores = agent.score_all_criteria(
             content={"response": response_text},
@@ -243,17 +245,17 @@ def _score_one(agent, response_text: str, wp: WritingPrompt) -> Tuple[float, str
         )
     except JudgeInputError as e:
         print(f"[creative_solver_caller] invalid_criteria: {e}", flush=True)
-        return 0.0, "invalid_criteria"
+        return 0.0, FailureReason.INVALID_CRITERIA.value
     except JudgeAPIError as e:
-        reason = "judge_rate_limit" if e.status_code == 429 else "judge_api_error"
+        reason = FailureReason.JUDGE_RATE_LIMIT.value if e.status_code == 429 else FailureReason.JUDGE_API_ERROR.value
         print(f"[creative_solver_caller] {reason}: {e}", flush=True)
         return 0.0, reason
     except JudgeParseError as e:
         print(f"[creative_solver_caller] judge_parse_fail: {e}", flush=True)
-        return 0.0, "judge_parse_fail"
+        return 0.0, FailureReason.JUDGE_PARSE_FAIL.value
     except Exception as e:
         print(f"[creative_solver_caller] scoring failed: {e}", flush=True)
-        return 0.0, "judge_api_error"
+        return 0.0, FailureReason.JUDGE_API_ERROR.value
 
     valid = [
         v["score"]
@@ -261,8 +263,8 @@ def _score_one(agent, response_text: str, wp: WritingPrompt) -> Tuple[float, str
         if isinstance(v.get("score"), (int, float)) and v["score"] > 0
     ]
     if not valid:
-        return 0.0, "judge_parse_fail"
-    return mean(valid), "ok"
+        return 0.0, FailureReason.JUDGE_PARSE_FAIL.value
+    return mean(valid), FailureReason.OK.value
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +377,7 @@ def compute_score(
         cjk_matches = find_cjk_matches(pred_answer)
         if cjk_matches:
             language_filtered.add(i)
-            failure_reasons[i] = "language_filter"
+            failure_reasons[i] = FailureReason.LANGUAGE_FILTER.value
             print(
                 f"[creative_solver_caller] non-English answer at idx={i} "
                 f"({len(cjk_matches)} CJK chars matched) — assigning zero reward; "
@@ -421,7 +423,7 @@ def compute_score(
                         flush=True,
                     )
                     raw_scores[idx] = 0.0
-                    failure_reasons[idx] = "judge_api_error"
+                    failure_reasons[idx] = FailureReason.JUDGE_API_ERROR.value
     else:
         max_workers = 0
 
@@ -444,7 +446,7 @@ def compute_score(
         # the rank distribution for valid responses in the same group.
         scoreable = {idx: s for idx, s in eval_scores_group.items() if idx not in language_filtered}
 
-        all_failed = bool(scoreable) and all(failure_reasons[idx] != "ok" for idx in scoreable)
+        all_failed = bool(scoreable) and all(failure_reasons[idx] != FailureReason.OK for idx in scoreable)
         low_quality = (
             bool(scoreable) and not all_failed and max(scoreable.values()) <= _LOW_QUALITY_THRESHOLD
         )

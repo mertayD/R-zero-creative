@@ -43,12 +43,14 @@ for _p in (_REPO, _WB_DIR):
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 
 from creative_rzero.data.writing_prompt import WritingPrompt
+from creative_rzero.failure_reasons import FailureReason
 from creative_rzero.utils import FormatValidator
 from evaluation.shared.rewards import compute_writing_reward
 from evaluation.shared.utilities import split_thinking
 from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
 
-# failure_reason taxonomy — every sample gets exactly one:
+# failure_reason taxonomy — every sample gets exactly one. Canonical values
+# live in creative_rzero/failure_reasons.py:FailureReason —
 #   ok                         — scored normally
 #   truncated                  — <output>…</output> JSON never parsed, and the
 #                                 response looks cut off by max_response_length
@@ -261,10 +263,10 @@ def _score_one(
     """Score one solver response against its criteria.
 
     Returns (reward_dict, failure_reason). reward_dict's overall/accuracy are
-    0.0 whenever failure_reason != "ok".
+    0.0 whenever failure_reason != FailureReason.OK.
     """
     if not solver_text.strip():
-        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, "empty_answer"
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, FailureReason.EMPTY_ANSWER.value
     try:
         criterion_scores = agent.score_all_criteria(
             content={"response": solver_text},
@@ -273,23 +275,23 @@ def _score_one(
         )
     except JudgeInputError as e:
         print(f"[creative_writing_caller] invalid_criteria: {e}", flush=True)
-        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, "invalid_criteria"
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, FailureReason.INVALID_CRITERIA.value
     except JudgeAPIError as e:
-        reason = "judge_rate_limit" if e.status_code == 429 else "judge_api_error"
+        reason = FailureReason.JUDGE_RATE_LIMIT.value if e.status_code == 429 else FailureReason.JUDGE_API_ERROR.value
         print(f"[creative_writing_caller] {reason}: {e}", flush=True)
         return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, reason
     except JudgeParseError as e:
         print(f"[creative_writing_caller] judge_parse_fail: {e}", flush=True)
-        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, "judge_parse_fail"
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, FailureReason.JUDGE_PARSE_FAIL.value
     except Exception as e:
         print(f"[creative_writing_caller] scoring failed: {e}", flush=True)
-        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, "judge_api_error"
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, FailureReason.JUDGE_API_ERROR.value
 
     valid = [v["score"] for v in criterion_scores.values() if v.get("score", 0) > 0]
     if not valid:
-        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, "judge_parse_fail"
+        return {"overall": 0.0, "format": 1.0, "accuracy": 0.0}, FailureReason.JUDGE_PARSE_FAIL.value
     avg = mean(valid)
-    return compute_writing_reward(avg_score=avg, format_valid=True), "ok"
+    return compute_writing_reward(avg_score=avg, format_valid=True), FailureReason.OK.value
 
 
 def compute_score(
@@ -315,7 +317,7 @@ def compute_score(
     # remaining field extraction with safe defaults.
     parsed: List[Optional[WritingPrompt]] = []
     challenger_thinking: List[str] = []
-    failure_reasons: List[str] = ["ok"] * len(predicts)
+    failure_reasons: List[str] = [FailureReason.OK.value] * len(predicts)
     for i, predict in enumerate(predicts):
         thinking, answer = split_thinking(predict)
         challenger_thinking.append(thinking)
@@ -323,9 +325,9 @@ def compute_score(
         if fmt != 1:
             parsed.append(None)
             failure_reasons[i] = (
-                "truncated"
+                FailureReason.TRUNCATED.value
                 if _looks_truncated(predict, _CHALLENGER_MAX_RESPONSE_LENGTH)
-                else "challenger_format_invalid"
+                else FailureReason.CHALLENGER_FORMAT_INVALID.value
             )
             continue
         try:
@@ -333,13 +335,13 @@ def compute_score(
         except Exception as e:
             print(f"[creative_writing_caller] WritingPrompt.from_dict failed: {e}", flush=True)
             parsed.append(None)
-            failure_reasons[i] = "challenger_format_invalid"
+            failure_reasons[i] = FailureReason.CHALLENGER_FORMAT_INVALID.value
             continue
         if wp.query.strip() and wp.criteria:
             parsed.append(wp)
         else:
             parsed.append(None)
-            failure_reasons[i] = "challenger_format_invalid"
+            failure_reasons[i] = FailureReason.CHALLENGER_FORMAT_INVALID.value
 
     # --- Step 2: batch vLLM query for all valid predicts ---
     valid_idx     = [i for i, wp in enumerate(parsed) if wp is not None]
@@ -368,7 +370,7 @@ def compute_score(
     for idx in valid_idx:
         if idx not in solver_texts:
             scores[idx] = {"overall": 0.0, "format": 1.0, "accuracy": 0.0}
-            failure_reasons[idx] = "solver_api_error"
+            failure_reasons[idx] = FailureReason.SOLVER_API_ERROR.value
 
     # to_score entries: (list_index, solver_response_text, WritingPrompt)
     # _score_one receives the WritingPrompt and accesses .query / .criteria internally.
