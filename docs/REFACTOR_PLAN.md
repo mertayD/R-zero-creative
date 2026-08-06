@@ -64,9 +64,16 @@ creative_rzero/              # single installable package; no sys.path hacks
   config.py                  # typed ExperimentConfig (dataclass/pydantic); load = base ⊕ exp overrides;
                              # validates at load time; resolved config dumped to run dir
   paths.py                   # RunPaths — THE single source of run/checkpoint/parquet/log layout
+  utils.py                   # FormatValidator, is_english_output, find_cjk_matches — shared by
+                             # generation (steps/generate_prompts.py) and both reward callers
+  data/
+    writing_prompt.py        # WritingPrompt / QueryRequirements / PromptBatch data model
+  prompts/
+    one_shot.py              # challenger one-shot generation prompt copy (system/user templates)
   orchestrator.py            # co-evolution loop in pure Python (state, resume, verify, HF upload)
   steps/
-    generate_prompts.py      # challenger ckpt → WritingPrompt JSON (was Step 0 bash)
+    generate_prompts.py      # challenger ckpt → WritingPrompt JSON (was Step 0 bash); also owns domain
+                             # sampling, prompt construction, response validation, the CLI entrypoint
     build_parquet.py         # prompts → train/val parquet (was bash heredoc)
     train_verl.py            # renders resolved verl YAML to run dir, launches trainer; no dotted-arg walls
     merge_ckpt.py            # wraps model_merger
@@ -127,7 +134,9 @@ Per-task format: **Pointers** (files/functions/lines as of today) · **Do** · *
 - Goal: make H1-class bugs visible in every future run log; this single line would have caught the original issue.
 - Accept: `grep RENDERED_PROMPT` on any run log shows the exact string the model saw.
 
-**T1.3 — Reconcile the env-var / checkpoint-path contract**
+**T1.3 — ~~Reconcile the env-var / checkpoint-path contract~~ DROPPED (see §5)** — no runs happen before the bash/env layer is deleted, so patching its names is wasted motion. Superseded by T2.6/T2.8 eliminating the layer.
+
+*Original task kept for reference:*
 - Pointers: `modal_run.py` env dicts in `train_creative_challenger` (L1460–1474) and `train_creative_solver` (L1637–1651): set `RUN_ID`, `{CHALLENGER,SOLVER}_MAX_STEPS`, `*_ROLLOUT_N`; scripts read `SMOKE_RUN_ID` (`creative_challenger_smoke.sh` L49, `creative_solver_smoke.sh` L52), `SMOKE_*_MAX_STEPS` / `SMOKE_*_ROLLOUT_N` (L34–35 / L41–43). Returned paths built at `modal_run.py` L1496, L1673 vs. script `SAVE_NAME` (`…_challenger_v1[_ts]` / `…_solver_v1[_ts]`).
 - Do: (a) trace how your real runs actually received G=8 / step counts (find the launch path; document it in this file); (b) pick one canonical name per knob, fix both sides; (c) add `: "${VAR:?not set}"` guards at the top of each script; (d) stop reconstructing checkpoint paths in `modal_run.py` — have each script write the final merged path to `${STORAGE_PATH}/…/last_ckpt.txt` and have the Modal function read it back.
 - Goal: no silent-default degradation; path agreement by construction. (Phase 2 deletes this whole layer — do the minimum that makes Week-2 runs trustworthy.)
@@ -204,6 +213,23 @@ Per-task format: **Pointers** (files/functions/lines as of today) · **Do** · *
 - Pointers: `creative_solver_smoke.sh` L100–115; `question_generate/one_shot_creative_question_generate.py` CLI.
 - Do: `generate_prompts(cfg, paths, challenger_ckpt) -> Path` calling the generator in-process (or via subprocess with explicit args); returns the prompts JSON path; raises with prompt-count context on shortfall.
 - Accept: produces byte-equivalent JSON to the bash path for a fixed seed.
+- **Implementation note (done during T2.4):** built in two passes. First pass kept `question_generate/one_shot_creative_question_generate.py` as-is and had `generate_prompts()` subprocess out to it (`python3 <old file> --model ... --save_name ...`), matching the "or via subprocess" option above. Second pass (full cutover, prompted by review) went further than the task scoped: split that file entirely —
+  - `creative_rzero/data/writing_prompt.py` — `WritingPrompt` / `QueryRequirements` / `PromptBatch` (the data model; also used by both reward callers and `steps/build_parquet.py`)
+  - `creative_rzero/utils.py` — `FormatValidator` / `is_english_output` / `find_cjk_matches` (format/language validation; also used by both reward callers)
+  - `creative_rzero/prompts/one_shot.py` — `ONE_SHOT_SYSTEM_PROMPT` / `render_one_shot_user_prompt` (the actual prompt copy, kept separate from sampling/control-flow)
+  - `creative_rzero/steps/generate_prompts.py` — `DomainSampler`, `build_one_shot_prompt`, `validate_one_shot_response`, `generate_prompts_batch`, `run_generation`, the CLI entrypoint, and the typed `generate_prompts()` step
+
+  Old file deleted outright (no shim); the 3 real consumers (`creative_writing_caller.py`, `creative_solver_caller.py`, `evaluation/writing_bench/solver_sampling.py`) and both bash scripts' import/invocation paths were repointed at the new locations in the same change. `vllm`/`transformers` imports were made lazy (function-scope, not module-scope) throughout so the data/validation modules stay importable without a GPU — this is what let 37 new unit tests get written for logic (`DomainSampler`, `build_one_shot_prompt`, `validate_one_shot_response`, the `generate_prompts_batch` retry/attempt-cap loop via a fake injected `vllm` module, `FormatValidator`) that had **zero** test coverage before, despite already existing pre-refactor.
+
+  `generate_prompts()` also stopped subprocessing entirely — it now calls `run_generation()` in-process. Rationale: post-consolidation, subprocessing would have meant the module spawning a child process that re-executes itself (`python -m creative_rzero.steps.generate_prompts`), which only made sense for two reasons, one of which is fixable and one of which has no caller yet (see "Known follow-up" below).
+
+- **Known follow-ups / cleanup surfaced by this work (not yet actioned):**
+  1. **GPU-process isolation deferred, not solved.** The original subprocess call existed partly to guarantee vLLM's CUDA context/KV cache gets released (a child process exiting is the only reliable teardown) and partly to contain `main()`'s old `sys.exit(1)` calls. The `sys.exit` reason is now moot (refactored to raise `PromptGenerationError`), but the GPU-memory reason is real — it just has no caller today, since `orchestrator.py` (T2.8) doesn't exist yet. **When T2.8 is built and calls `generate_prompts()` once per co-evolution iteration from one long-lived process, revisit whether repeated in-process vLLM loads leak GPU memory across iterations.** If so, the isolation decision belongs at the orchestrator level (e.g. subprocessing a whole iteration), not baked back into this step.
+  2. **Two dead branches found via the new tests, left in place (documented at their call sites in `tests/test_generate_prompts.py`), not fixed:**
+     - `PromptBatch.generation_log["total_attempted"]` / `["skipped"]` only ever increment on a *successful* slot — `generate_prompts_batch` explicitly never calls `add_prompt(None)` on failure — so these two counters don't track what their names imply. `format_validation_failures` / `language_filter_failures` are the counters that actually work.
+     - `generate_prompts_batch`'s own inline check (`if is_valid and not is_english_output(parsed_json.get('query', '')))`) is unreachable: `validate_one_shot_response` → `FormatValidator.validate_response` already rejects a non-English `query` earlier in the same call chain, so `is_valid` is already `False` by the time this second check would run.
+     - Candidate for T3.8 (test suite hardening) or a small standalone cleanup pass: either wire `total_attempted`/`skipped` up to mean what they say, or drop them; delete the unreachable language check.
+  3. **Still unvalidated on a real GPU box.** All new coverage is unit-level against fakes (`_FakeLLM`, an injected fake `vllm` module) — nobody has run `run_generation()` against a real checkpoint since the split. First real signal will come from T2.9's validation run; if it surfaces an issue, it's likely in `run_generation`'s vLLM/tokenizer wiring specifically, since that's the one code path the fakes can't exercise.
 
 **T2.5 — `steps/build_parquet.py`** (port of both bash heredocs)
 - Pointers: `creative_solver_smoke.sh` L120–205 heredoc; equivalent block in the challenger script.
@@ -224,10 +250,9 @@ Per-task format: **Pointers** (files/functions/lines as of today) · **Do** · *
 - Do: one decorator-factory for the shared Modal env; functions become `cfg = load(...); orchestrator.run_iteration(cfg, paths)`. Keep `modal_run.py` untouched until T2.9 passes, then delete `creative_{challenger,solver,coevolve}_smoke.sh` and the old functions.
 - Accept: `modal run modal_app.py::coevolve --config configs/exp/repro.yaml` completes a smoke-profile iteration end-to-end.
 
-**T2.9 — Parity run**
-- Do: define `configs/exp/repro_old_pipeline.yaml` reproducing the old effective settings (minus intended Phase-1 fixes); run smoke-size old vs. new; compare: parquet schemas, resolved verl keys, checkpoint layout, reward-log schema.
-- Goal: refactor verified behavior-preserving before the old path is deleted.
-- Accept: written diff report in `docs/`; only intended deltas present.
+**T2.9 — Validation run (replaces parity run — see §5)**
+- Do: one smoke-profile GPU run of the **new** pipeline only. No old-vs-new comparison — the old pipeline's behavior was wrong (math format prompt, tie noise, dead gate); reproducing it proves nothing.
+- Accept, from that single run's logs: `[RENDERED_PROMPT]` clean (no `\boxed`/monologue); `failure_reason` table with `ok` ≥ 95%; `mean_rank_reward ≈ 0.5` in non-gated groups; challenger format-valid > 80%; checkpoint selected by health metric and recorded in manifest. This run doubles as the "after" distribution stats for the paper's diagnostic figure.
 
 ### Phase 3 — Reward registry (day 4)
 
@@ -275,3 +300,29 @@ Day 5: T4.1–T4.5
 ```
 
 Phase-1 tasks are each ≤ 1–2 h and independently shippable; if time squeezes, T1.1–T1.4 + T1.7 + T1.11 are the non-negotiables before the next real run.
+
+---
+
+## 5. Revision 2026-08-05 — no runs until Week 1 completes; T1.x–T2.4 already implemented
+
+The no-interim-runs constraint removes all backward-compatibility obligations. Changes:
+
+1. **T1.3 dropped.** Don't patch env-var names in a layer that dies before it's ever run again; T2.6/T2.8 replace the env hand-off with typed args directly.
+2. **T2.9 parity → validation.** No old-vs-new diffing; the old behavior was the bug. One smoke GPU run of the new pipeline at the end of Week 1, judged against instrumentation criteria (see revised T2.9). It doubles as the "after" figure data.
+3. **T4.1 quarantine → deletion.** `git tag pre-refactor`, then `git rm` the math artifacts (same list). `legacy/` only made sense to keep the old path runnable during a transition that no longer exists. Also delete `modal_run.py`'s creative functions and `run_smoke_test` in the same commit as T2.8 lands.
+4. **Mock-first validation: T3.1 (MockJudge) and T4.4 (dry-run) are promoted to the critical path.** With no GPU runs during the build, the mock-judge dry-run is the *only* end-to-end correctness signal — build it alongside Phase 2 remainder, not on day 5. Concretely: every `steps/` module gets exercised by the dry-run the day it's written.
+5. **Registry before wiring: do T3.3/T3.6 before T2.8**, so `train_verl.py`'s `worker.reward.reward_function` points at `rewards/verl_entry.py` from the first commit — the orchestrator never temporarily targets the old caller files, and the Phase-1 fixes (T1.6/T1.7/T1.8/T1.10) live only in the new strategy classes (port them out of the old callers if they were patched there, then delete the old callers).
+
+**Revised order for the remaining work (T2.4 done):**
+
+```
+Next:  T3.1 (incl. MockJudge) → T3.2 → T3.3            # judge + registry skeleton
+Then:  T2.5, T2.6 (reward_function → verl_entry), T2.7  # steps, validated via mock
+       T3.4, T3.5 → T3.6, T3.7                          # strategies (port Phase-1 fixes here)
+       T2.8 (modal_app + orchestrator) + delete old scripts/functions (rev. T4.1)
+Gate:  T3.8 tests + T4.4 dry-run green                  # no GPU spent before this passes
+Then:  T4.3 manifest, T4.5 profiles, T4.2 README
+End of Week 1: T2.9 validation run (first GPU spend)
+```
+
+Rationale for the gate: the single most expensive failure mode this week is discovering a wiring bug during the first GPU run. The dry-run must exercise: config load → prompt gen (mock) → parquet → resolved verl YAML render → `verl_entry` dispatch with MockJudge → rank/variance reward math → health-based checkpoint selection → orchestrator state save/resume.
