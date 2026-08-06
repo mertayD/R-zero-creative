@@ -8,6 +8,7 @@ import pytest
 from creative_rzero.config import load
 from creative_rzero.data.writing_prompt import PromptBatch
 from creative_rzero.paths import RunPaths
+from creative_rzero.prompts.one_shot import ONE_SHOT_SYSTEM_PROMPT
 from creative_rzero.steps.generate_prompts import (
     DomainSampler,
     PromptGenerationError,
@@ -16,7 +17,7 @@ from creative_rzero.steps.generate_prompts import (
     generate_prompts_batch,
     validate_one_shot_response,
 )
-from question_generate.creative_writing_prompts import WRITING_DOMAINS
+from question_generate.creative_writing_prompts import QUERY_REFINEMENT_GUIDANCE_POOL, WRITING_DOMAINS
 
 EXAMPLE_EXP = "configs/exp/example.yaml"
 
@@ -26,11 +27,14 @@ EXAMPLE_EXP = "configs/exp/example.yaml"
 # =============================================================================
 
 def test_domain_sampler_returns_a_known_domain_and_subdomain():
-    sampler = DomainSampler(seed=1)
-    domain_key, subdomain = sampler.sample_domain_subdomain_pair()
+    # One sampler per domain-sized seed rather than a single sample, so this
+    # exercises every domain's subdomain list at least once instead of
+    # whichever one seed=1 happens to land on.
+    for seed in range(len(WRITING_DOMAINS)):
+        domain_key, subdomain = DomainSampler(seed=seed).sample_domain_subdomain_pair()
 
-    assert domain_key in WRITING_DOMAINS
-    assert subdomain in WRITING_DOMAINS[domain_key]["subdomains"]
+        assert domain_key in WRITING_DOMAINS
+        assert subdomain in WRITING_DOMAINS[domain_key]["subdomains"]
 
 
 def test_domain_sampler_is_deterministic_for_a_fixed_seed():
@@ -43,12 +47,12 @@ def test_domain_sampler_is_deterministic_for_a_fixed_seed():
 def test_build_one_shot_prompt_embeds_domain_and_subdomain():
     system_prompt, user_prompt, applied_guidance = build_one_shot_prompt("D1", "short story")
 
-    assert "<output>" in system_prompt or "<output>" in user_prompt
+    # system_prompt is the fixed constant from creative_rzero.prompts.one_shot
+    assert system_prompt is ONE_SHOT_SYSTEM_PROMPT
+    assert "<output>" in user_prompt
     assert "short story" in user_prompt
     assert WRITING_DOMAINS["D1"]["name"] in user_prompt
-    assert 1 <= len(applied_guidance) <= len(
-        __import__("question_generate.creative_writing_prompts", fromlist=["QUERY_REFINEMENT_GUIDANCE_POOL"]).QUERY_REFINEMENT_GUIDANCE_POOL
-    )
+    assert 1 <= len(applied_guidance) <= len(QUERY_REFINEMENT_GUIDANCE_POOL)
 
 
 # =============================================================================

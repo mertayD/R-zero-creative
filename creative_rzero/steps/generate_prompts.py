@@ -19,18 +19,18 @@ GPU-free config validation/tests).
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import random
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Optional
 
 from creative_rzero.config import ExperimentConfig
 from creative_rzero.data.writing_prompt import PromptBatch, QueryRequirements, WritingPrompt
 from creative_rzero.paths import RunPaths
+from creative_rzero.prompts.one_shot import ONE_SHOT_SYSTEM_PROMPT, render_one_shot_user_prompt
 from creative_rzero.utils import FormatValidator, is_english_output
 from evaluation.shared.utilities import split_thinking
 from question_generate.creative_writing_prompts import QUERY_REFINEMENT_GUIDANCE_POOL, WRITING_DOMAINS
@@ -103,132 +103,15 @@ def build_one_shot_prompt(domain_key: str, subdomain: str, language: str = "Engl
     applied_guidance = random.sample(QUERY_REFINEMENT_GUIDANCE_POOL, num_guidance) if num_guidance > 0 else []
     guidance_text = "\n".join([f"  - {g}" for g in applied_guidance]) if applied_guidance else "  (none selected)"
 
-    system_prompt = f"""You are an expert writing task generator with deep knowledge of diverse writing domains and subdomains.
+    user_prompt = render_one_shot_user_prompt(
+        domain_name=domain_name,
+        domain_description=domain_description,
+        subdomain=subdomain,
+        guidance_text=guidance_text,
+        language=language,
+    )
 
-CRITICAL FORMATTING RULES:
-1. You MUST wrap your entire response in <output> and </output> tags
-2. Inside the tags, return ONLY valid JSON (no markdown, no code blocks, no explanations)
-3. Do NOT include any text before the <output> tag
-4. Do NOT include any text after the </output> tag
-5. Do NOT use unescaped quotes inside JSON strings
-6. Your response MUST be parseable as valid JSON
-
-Do NOT violate these rules under any circumstances."""
-
-    user_prompt = f"""Generate ONE detailed writing prompt for the subdomain "{subdomain}" within {domain_name}.
-
-DOMAIN CONTEXT:
-- Domain: {domain_name}
-- Description: {domain_description}
-- Subdomain: {subdomain}
-- Language: {language}
-
-INTERNAL REASONING STAGE (private, do not output):
-
-STEP 1: IDEATION & CONTEXT
-- Think about the {domain_name} domain and specifically the "{subdomain}" subdomain
-- Consider realistic, detailed, and specific writing requests appropriate for this context
-- Ensure the requests reflect the domain's standards and typical use cases
-
-STEP 2: APPLY REFINEMENT PRINCIPLES
-These refinement principles help enhance the prompt quality:
-{guidance_text}
-
-As you design the prompt, incorporate these principles to make it more specific, constrained, and valuable.
-
-STEP 3: DESIGN EVALUATION CRITERIA
-Create 5 strict evaluation criteria that can distinguish subtle differences in response quality.
-
-Each criterion MUST include:
-- name: A concise criterion name
-- criteria_description: Detailed description emphasizing what the criterion evaluates
-- "1-2": Critical deficiencies and major issues
-- "3-4": Below average - noticeable shortcomings
-- "5-6": Average - adequate but not exemplary
-- "7-8": Above average - competent execution
-- "9-10": High - exceptional performance
-
-The criteria should emphasize:
-- Relevance to the writing task
-- Coherence and logical flow
-- Depth and specificity
-- Adherence to requirements
-- Overall quality and effectiveness
-
-STEP 4: IDENTIFY REQUIREMENTS
-Look for and identify any:
-- Style requirements (e.g., formal, casual, tone, audience)
-- Format requirements (e.g., structure, template, outline)
-- Length requirements (e.g., word count, page count, character limits)
-
-OUTPUT STAGE - Return ONLY this JSON format (nothing else):
-<output>
-{{
-  "query": "Your detailed, polished, specific writing prompt that reflects the refinement principles",
-  "criteria": [
-    {{
-      "name": "Criterion 1 Name",
-      "criteria_description": "Detailed description for the first criteria, emphasizing detailed and critical assessment.",
-      "1-2": "Low score description: Critical deficiencies and major issues that prevent adequate functionality.",
-      "3-4": "Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.",
-      "5-6": "Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements.",
-      "7-8": "Above average score description: Strong performance characterized by competent execution, though minor refinements are needed.",
-      "9-10": "High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness."
-    }},
-    {{
-      "name": "Criterion 2 Name",
-      "criteria_description": "Detailed description for the second criteria...",
-      "1-2": "...",
-      "3-4": "...",
-      "5-6": "...",
-      "7-8": "...",
-      "9-10": "..."
-    }},
-    {{
-      "name": "Criterion 3 Name",
-      "criteria_description": "...",
-      "1-2": "...",
-      "3-4": "...",
-      "5-6": "...",
-      "7-8": "...",
-      "9-10": "..."
-    }},
-    {{
-      "name": "Criterion 4 Name",
-      "criteria_description": "...",
-      "1-2": "...",
-      "3-4": "...",
-      "5-6": "...",
-      "7-8": "...",
-      "9-10": "..."
-    }},
-    {{
-      "name": "Criterion 5 Name",
-      "criteria_description": "...",
-      "1-2": "...",
-      "3-4": "...",
-      "5-6": "...",
-      "7-8": "...",
-      "9-10": "..."
-    }}
-  ],
-  "requirements": {{
-    "style": "Style requirement if explicitly mentioned, null otherwise",
-    "format": "Format requirement if explicitly mentioned, null otherwise",
-    "length": "Length requirement if explicitly mentioned, null otherwise"
-  }}
-}}
-</output>
-
-CRITICAL REMINDERS:
-- Do NOT output your internal reasoning. Only output the JSON block.
-- Ensure the query is specific and detailed, reflecting the refinement principles you applied.
-- Each 5 criterion must have all 5 score levels (1-2, 3-4, 5-6, 7-8, 9-10) with detailed descriptions.
-- Be strict in criteria design to distinguish subtle differences in quality.
-- Reference exact aspects of what makes responses succeed or fail at each level.
-- Make sure outputs are in {language} language."""
-
-    return system_prompt, user_prompt, applied_guidance
+    return ONE_SHOT_SYSTEM_PROMPT, user_prompt, applied_guidance
 
 
 def validate_one_shot_response(response: str) -> tuple[bool, Optional[dict], str]:
