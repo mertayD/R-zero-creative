@@ -42,7 +42,8 @@ for _p in (_REPO, _WB_DIR):
 
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 
-from question_generate.one_shot_creative_question_generate import FormatValidator, WritingPrompt
+from creative_rzero.data.writing_prompt import WritingPrompt
+from creative_rzero.utils import FormatValidator
 from evaluation.shared.rewards import compute_writing_reward
 from evaluation.shared.utilities import split_thinking
 from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError

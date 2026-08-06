@@ -85,7 +85,7 @@ sys.path.insert(0, os.environ.get("REMOTE_REPO_PATH", "/root/R-Zero"))
 
 from pathlib import Path
 import pandas as pd
-from question_generate.one_shot_creative_question_generate import DomainSampler, build_one_shot_prompt
+from creative_rzero.steps.generate_prompts import DomainSampler, build_one_shot_prompt
 from question_generate.creative_writing_prompts import WRITING_DOMAINS
 
 _seed            = int("$seed")

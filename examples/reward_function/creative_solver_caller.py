@@ -58,7 +58,8 @@ for _p in (_REPO, _WB_DIR):
 
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 
-from question_generate.one_shot_creative_question_generate import WritingPrompt, find_cjk_matches
+from creative_rzero.data.writing_prompt import WritingPrompt
+from creative_rzero.utils import find_cjk_matches
 from evaluation.shared.utilities import split_thinking
 from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
 

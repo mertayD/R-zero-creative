@@ -109,7 +109,7 @@ PROMPTS_SAVE_NAME="${Model_abbr}_solver_prompts"
 PROMPTS_SUFFIX="smoke"
 PROMPTS_JSON="${STORAGE_PATH}/generated_questions_one_shot/${PROMPTS_SAVE_NAME}_${PROMPTS_SUFFIX}.json"
 
-CUDA_VISIBLE_DEVICES=7 python3 question_generate/one_shot_creative_question_generate.py \
+CUDA_VISIBLE_DEVICES=7 python3 -m creative_rzero.steps.generate_prompts \
     --model "$challenger_checkpoint" \
     --num_samples "$NUM_PROMPTS" \
     --seed "$seed" \

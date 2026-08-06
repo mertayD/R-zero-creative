@@ -45,7 +45,7 @@ from evaluation.writing_bench.evaluator import ClaudeAgent, CriticAgent
 from evaluation.writing_bench.prompt import evaluate_system
 
 # Import WritingPrompt class
-from question_generate.one_shot_creative_question_generate import WritingPrompt
+from creative_rzero.data.writing_prompt import WritingPrompt
 
 
 def load_prompts_from_json(json_path: str) -> List[WritingPrompt]:
