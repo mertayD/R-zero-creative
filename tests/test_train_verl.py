@@ -91,6 +91,40 @@ def test_launch_training_returns_config_path_on_success(cfg, paths, tmp_path):
     assert (run_dir / "resolved_config.yaml").exists()
 
 
+def test_launch_training_forwards_judge_and_runtime_env(cfg, paths, tmp_path, monkeypatch):
+    """The clean-env subprocess must not drop the vars the reward path and
+    GPU runtime depend on: the judge's gateway key (every judge call would
+    crash), the callers' repo-root pointer, localhost proxy bypasses, and
+    the container-level CUDA/NCCL/vLLM tuning."""
+    forwarded = {
+        "PERPLEXITY_API_KEY": "pplx-test",
+        "REMOTE_REPO_PATH": "/root/R-Zero",
+        "NO_PROXY": "127.0.0.1,localhost",
+        "no_proxy": "127.0.0.1,localhost",
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False",
+        "VLLM_DISABLE_COMPILE_CACHE": "1",
+        "NCCL_DEBUG": "WARN",
+        "TOKENIZERS_PARALLELISM": "true",
+        "HUGGINGFACE_HUB_CACHE": "/storage/hf_cache",
+    }
+    for k, v in forwarded.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("SOME_UNRELATED_SECRET", "must-not-leak")
+
+    calls = {}
+
+    def fake_popen(cmd, **kwargs):
+        calls["env"] = kwargs["env"]
+        return _FakeProc([], 0)
+
+    launch_training(cfg, paths, "solver", tmp_path / "run_dir", popen=fake_popen)
+
+    for k, v in forwarded.items():
+        assert calls["env"].get(k) == v, f"{k} not forwarded to the training subprocess"
+    # the env stays explicit — everything not on the forward list is dropped
+    assert "SOME_UNRELATED_SECRET" not in calls["env"]
+
+
 def test_launch_training_raises_with_tail_on_nonzero_exit(cfg, paths, tmp_path):
     def fake_popen(cmd, **kwargs):
         return _FakeProc(["all good\n", "boom\n"], 1)
