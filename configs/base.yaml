@@ -19,6 +19,7 @@ run:
   abbr: null              # short name used to build checkpoint/run directory names — required, set per run
   profile: smoke           # smoke | small | full — controls run size (steps, batch sizes, judge concurrency)
   seed: 42                 # shared seed for domain sampling, prompt generation, and dataset shuffling
+  num_iters: 1             # co-evolution rounds; each round = one challenger training phase + one solver training phase
 
 # ---------------------------------------------------------------------------
 # Challenger role — trains the model that generates creative-writing prompts
