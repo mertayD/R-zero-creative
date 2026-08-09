@@ -94,6 +94,7 @@ def test_solver_dispatch_reaches_real_caller(verl_entry, resolved_config_env, fa
     import os
 
     cfg = resolved_config_env
+    assert os.environ["WB_JUDGE_TYPE"] == cfg.judge.type
     assert os.environ["WB_JUDGE_MODEL"] == cfg.judge.model
     assert os.environ["SOLVER_MAX_RESPONSE_LENGTH"] == str(cfg.solver.max_response_length)
     assert os.environ["CREATIVE_SOLVER_PORT"] == str(cfg.challenger.solver_query.port)
@@ -114,6 +115,33 @@ def test_challenger_dispatch_reaches_real_caller(verl_entry, resolved_config_env
     cfg = resolved_config_env
     assert os.environ["CHALLENGER_MAX_RESPONSE_LENGTH"] == str(cfg.challenger.max_response_length)
     assert os.environ["CREATIVE_SOLVER_MAX_TOKENS"] == str(cfg.challenger.solver_query.max_tokens)
+
+
+def test_mock_judge_type_routes_caller_to_mock_agent(verl_entry, fake_vllm_module, monkeypatch, tmp_path):
+    """judge.type=mock must make the reward caller build a MockJudgeAgent
+    instead of ClaudeAgent — the entire point being a training/reward run
+    that needs no PERPLEXITY_API_KEY at all."""
+    from creative_rzero.config import load, save_resolved
+
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    monkeypatch.setenv("REMOTE_REPO_PATH", str(REPO_ROOT))
+    for name in list(sys.modules):
+        if "creative_solver_caller" in name:
+            monkeypatch.delitem(sys.modules, name)
+
+    cfg = load(TINY_EXP, cli_args=["judge.type=mock"])
+    out = save_resolved(cfg, tmp_path)
+    monkeypatch.setenv("EXPERIMENT_CONFIG_PATH", str(out))
+
+    impl_module = verl_entry._get_impl("solver").__module__
+    caller = sys.modules[impl_module]
+    agent = caller._get_agent()
+
+    from batch_eval_agent import BatchEvalAgent
+    from evaluator import MockJudgeAgent
+
+    assert isinstance(agent, BatchEvalAgent)
+    assert isinstance(agent.agent, MockJudgeAgent)
 
 
 def test_materialized_verl_config_carries_role_and_abs_reward_path(tmp_path):

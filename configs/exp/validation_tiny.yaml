@@ -28,6 +28,7 @@ solver:
   max_response_length: 2048
 
 judge:
+  type: mock                      # random scores, no Perplexity/Claude call — this run is wiring validation, not judge quality
   max_workers: 2                  # only ~4 concurrent samples exist at this size
 
 verl:

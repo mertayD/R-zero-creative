@@ -206,10 +206,15 @@ def _get_wandb():
 def _get_agent():
     global _agent
     if _agent is None:
-        from evaluator import ClaudeAgent
         from batch_eval_agent import BatchEvalAgent
         from batch_eval_prompt import batch_evaluate_system
-        _agent = BatchEvalAgent(ClaudeAgent(system_prompt=batch_evaluate_system))
+        if os.environ.get("WB_JUDGE_TYPE", "claude") == "mock":
+            from evaluator import MockJudgeAgent
+            judge = MockJudgeAgent(system_prompt=batch_evaluate_system)
+        else:
+            from evaluator import ClaudeAgent
+            judge = ClaudeAgent(system_prompt=batch_evaluate_system)
+        _agent = BatchEvalAgent(judge)
     return _agent
 
 

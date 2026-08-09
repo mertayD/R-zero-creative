@@ -51,6 +51,7 @@ VALID_ROLES = ("challenger", "solver")
 # The strategy name is checked against `rewards.<role>.type` so a config
 # asking for a strategy these legacy callers don't implement fails loudly
 # instead of silently computing the wrong reward.
+# TODO(dayanc): replace this dict with a registry lookup once the Phase-3 registry is in place.
 _ROLE_IMPLS = {
     "solver": ("examples.reward_function.creative_solver_caller", "rank"),
     "challenger": ("examples.reward_function.creative_writing_caller", "uncertainty"),
@@ -80,7 +81,8 @@ def _bridge_config_to_env(cfg) -> None:
     setdefault: the resolved config is the source of truth, ambient env is
     not."""
     bridge = {
-        # judge client (evaluation/writing_bench/evaluator/llm.py)
+        # judge client (evaluation/writing_bench/evaluator/llm.py / mock.py)
+        "WB_JUDGE_TYPE": cfg.judge.type,
         "WB_JUDGE_MODEL": cfg.judge.model,
         "WB_JUDGE_MAX_TOKENS": cfg.judge.max_tokens,
         "JUDGE_MAX_HTTP_RETRY_ATTEMPTS": cfg.judge.http_max_retry_attempts,
