@@ -49,6 +49,7 @@ from creative_rzero.config import ExperimentConfig
 from creative_rzero.paths import RunPaths
 from creative_rzero.steps.build_parquet import build_challenger_parquet, build_solver_parquet
 from creative_rzero.steps.merge_ckpt import merge_checkpoint
+from creative_rzero.steps.report import report_generation, report_phase, summary_run_id
 from creative_rzero.steps.train_verl import launch_training
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -131,35 +132,6 @@ def verify_checkpoint(label: str, ckpt: str, reload_fn: Optional[Callable[[], No
     if not has_weights:
         raise CheckpointVerificationError(f"{label}: no weight files at {ckpt}")
     print(f"[OK] {label} checkpoint verified: {ckpt}")
-
-
-def upload_rollout_log(paths: RunPaths, role: str) -> None:
-    """Upload the per-rollout JSONL reward log as a W&B Table (bash Step 4).
-    Best-effort: skipped when W&B is disabled or the log doesn't exist."""
-    if os.environ.get("WANDB_MODE", "online") == "disabled":
-        print("[W&B] WANDB_MODE=disabled — skipping rollout upload")
-        return
-    log_path = paths.rollout_log(role)
-    if not log_path.exists():
-        print(f"[W&B] No rollout log found at {log_path} — skipping")
-        return
-    try:
-        import pandas as pd
-        import wandb
-
-        rows = [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
-        run = wandb.init(
-            project="r-zero-creative",
-            name=f"{paths.save_name(role)}_rollouts",
-            job_type="rollout_analysis",
-            group=os.environ.get("WANDB_RUN_GROUP"),
-            reinit=True,
-        )
-        run.log({f"{role}_rollouts": wandb.Table(dataframe=pd.DataFrame(rows))})
-        run.finish()
-        print(f"[W&B] Uploaded {len(rows)} rollout entries from {log_path}")
-    except Exception as e:  # W&B upload is telemetry, never a run-killer
-        print(f"[W&B] Rollout upload failed: {e}")
 
 
 def upload_parquets_to_hf(paths: RunPaths, role: str) -> None:
@@ -305,8 +277,10 @@ def run_challenger_phase(cfg: ExperimentConfig, paths: RunPaths) -> str:
     with solver_server(cfg.solver.model_path, cfg.challenger.solver_query.port, aux_gpu_id(cfg)):
         launch_training(cfg, paths, "challenger", run_dir)
 
+    # Report before merging: merge raises on a missing/collapsed checkpoint,
+    # and the rollout tables are exactly what you need to debug that failure.
+    report_phase(paths, "challenger", max_steps=cfg.challenger.max_steps)
     merged = merge_checkpoint(paths, "challenger", max_steps=cfg.challenger.max_steps)
-    upload_rollout_log(paths, "challenger")
     return str(merged)
 
 
@@ -318,14 +292,22 @@ def run_solver_phase(cfg: ExperimentConfig, paths: RunPaths, challenger_ckpt: st
     print(f">>> Phase B — solver training ({cfg.solver.model_path}, "
           f"{cfg.solver.max_steps} steps, G={cfg.solver.rollout_n}, iter {paths.iteration})")
 
-    prompts_json = generate_solver_prompts(cfg, paths, challenger_ckpt)
+    try:
+        prompts_json = generate_solver_prompts(cfg, paths, challenger_ckpt)
+    except PromptShortfallError:
+        # A shortfall is the single most common Phase B failure — report the
+        # generation artifacts before propagating, so the run's W&B page
+        # explains the crash instead of just ending at it.
+        report_generation(paths, paths.prompts_json(suffix=cfg.run.profile))
+        raise
+    report_generation(paths, prompts_json)
     build_solver_parquet(prompts_json, challenger_ckpt, cfg, paths)
 
     os.environ["CUDA_VISIBLE_DEVICES"] = training_gpu_ids(cfg)
     launch_training(cfg, paths, "solver", run_dir)
 
+    report_phase(paths, "solver", max_steps=cfg.solver.max_steps)
     merged = merge_checkpoint(paths, "solver", max_steps=cfg.solver.max_steps)
-    upload_rollout_log(paths, "solver")
     return str(merged)
 
 
@@ -333,17 +315,24 @@ def run_solver_phase(cfg: ExperimentConfig, paths: RunPaths, challenger_ckpt: st
 # The co-evolution loop (runs in the CPU orchestrator container)
 # ---------------------------------------------------------------------------
 
-def _wandb_summary_run(cfg: ExperimentConfig, run_ts: str, wandb_group: str) -> None:
-    """Create the W&B group's summary run so sub-runs nest under it."""
+def _wandb_summary_run(cfg: ExperimentConfig, paths: RunPaths, wandb_group: str) -> None:
+    """Create the W&B group's summary run so sub-runs nest under it.
+
+    Uses `report.summary_run_id` so the phases' `report_phase` calls resume
+    *this* run rather than creating their own — one run holds the config plus
+    every health table for the whole co-evolution.
+    """
     if not os.environ.get("WANDB_API_KEY"):
         return
     try:
         import wandb
 
         run = wandb.init(
-            project="r-zero-creative",
+            project=os.environ.get("WANDB_PROJECT", "r-zero-creative"),
+            id=summary_run_id(paths),
+            resume="allow",
             job_type="coevolve_summary",
-            name=f"coevolve_{cfg.run.abbr}_{run_ts}",
+            name=f"coevolve_{cfg.run.abbr}_{paths.run_ts}",
             group=wandb_group,
             config={
                 "challenger_model": cfg.challenger.model_path,
@@ -351,7 +340,7 @@ def _wandb_summary_run(cfg: ExperimentConfig, run_ts: str, wandb_group: str) -> 
                 "num_iters": cfg.run.num_iters,
                 "seed": cfg.run.seed,
                 "profile": cfg.run.profile,
-                "run_ts": run_ts,
+                "run_ts": paths.run_ts,
             },
             tags=["coevolve"],
         )
@@ -406,7 +395,7 @@ def run_coevolve(
         print(f"[FRESH] Starting co-evolution run_ts={run_ts}")
 
     os.environ.setdefault("WANDB_RUN_GROUP", state.wandb_group)
-    _wandb_summary_run(cfg, state.run_ts, state.wandb_group)
+    _wandb_summary_run(cfg, RunPaths(storage, cfg.run.abbr, state.run_ts, 1), state.wandb_group)
 
     print(
         f"=== Creative Co-Evolution | abbr={cfg.run.abbr} iters={cfg.run.num_iters} "
