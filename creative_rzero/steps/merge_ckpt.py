@@ -1,9 +1,17 @@
 """steps/merge_ckpt.py — merges a VERL FSDP checkpoint into a HuggingFace
 directory, with T1.11's health-based step selection built in.
 
-The old bash scripts always merged `global_step_{max_steps - 1}` (the last
-step trained) via `scripts/model_merger.py`, regardless of how that step's
-rollouts actually scored. REFACTOR_PLAN.md's T1.11 traced a real run where
+Step numbering: VERL is 1-indexed. `ray_trainer.fit` starts `global_step` at
+0 and increments it at the *top* of each training step, so a `max_steps: N`
+run saves `global_step_1 … global_step_N` and `global_step_0` never exists.
+Both reward callers' `step` counters are likewise 1-indexed and tick once per
+`compute_score` call, so a log step maps to the identically-numbered
+global_step. (The old bash scripts' `S_MERGE=$((S_STEPS-1))` convention was
+therefore itself off by one — it merged the second-to-last checkpoint.)
+
+The old bash scripts always merged a fixed step via
+`scripts/model_merger.py`, regardless of how that step's rollouts actually
+scored. REFACTOR_PLAN.md's T1.11 traced a real run where
 the solver's iter-1 checkpoint was merged from deep inside a step-19..32
 collapse region — feeding a degenerate policy into the next co-evolution
 round. This module reads the same rollout JSONL log the reward callers
@@ -111,14 +119,6 @@ def _group_key(row: dict) -> str:
     return f"row{row.get('rollout_idx', id(row))}"
 
 
-def _log_step_to_global_step(log_step: int) -> int:
-    """Both reward callers log a 1-indexed monotonic call counter (one
-    increment per `compute_score` call), not VERL's own 0-indexed
-    `global_step_N`. Assuming one `compute_score` call per training step
-    (true for both creative callers today), log step N is global_step N-1."""
-    return log_step - 1
-
-
 def _is_policy_failure(row: dict) -> bool:
     """A sample counts against a step's health if its failure isn't
     infra-attributable, or if it scored but scored as garbage: a solver
@@ -158,8 +158,12 @@ def compute_step_health(rollout_log: str | Path) -> dict[int, StepHealth]:
             if not line:
                 continue
             row = json.loads(line)
-            global_step = _log_step_to_global_step(row["step"])
-            groups_by_step[global_step][_group_key(row)].append(row)
+            # The reward callers' `step` is a 1-indexed counter incremented once
+            # per compute_score call, and VERL's global_step is likewise
+            # 1-indexed (ray_trainer increments it at the top of each training
+            # step, so the first step saves global_step_1) — one call per step
+            # makes the two the same number.
+            groups_by_step[row["step"]][_group_key(row)].append(row)
 
     rates: dict[int, tuple[float, int]] = {}
     for global_step, groups in groups_by_step.items():
@@ -202,17 +206,21 @@ def select_checkpoint_step(
     rollout_log: str | Path,
     max_steps: int,
 ) -> tuple[int, Optional[StepHealth]]:
-    """Pick the step to merge: the latest global_step (0-indexed, < max_steps)
+    """Pick the step to merge: the latest global_step (1-indexed, <= max_steps)
     that's unflagged with a policy-collapse rate below HEALTHY_RATE. If none
     qualifies, fall back to the least-bad step available (unflagged preferred
     over flagged, then lowest rate, then most recent). If the log has no rows
-    for any step in range at all, fall back to `max_steps - 1` — the old
-    scripts' blind convention — with `health=None` since there's no signal.
+    for any step in range at all, fall back to `max_steps` — the last step
+    trained — with `health=None` since there's no signal.
+
+    Steps are 1-indexed because VERL's are: `global_step` is incremented at
+    the top of each training step, so a `max_steps: N` run writes
+    `global_step_1 … global_step_N` and there is no `global_step_0`.
     """
     health = compute_step_health(rollout_log)
-    candidates = [health[s] for s in range(max_steps) if s in health]
+    candidates = [health[s] for s in range(1, max_steps + 1) if s in health]
     if not candidates:
-        return max_steps - 1, None
+        return max_steps, None
 
     healthy = [h for h in candidates if not h.flagged and h.policy_collapse_rate < HEALTHY_RATE]
     if healthy:
