@@ -47,3 +47,40 @@ class FailureReason(str, Enum):
 # reward from either cause is zero GRPO advantage, but only a policy failure
 # (every other non-OK reason) says anything about the checkpoint itself.
 INFRA_FAILURE_REASONS = frozenset({FailureReason.JUDGE_API_ERROR, FailureReason.JUDGE_RATE_LIMIT})
+
+
+class FormatFailureReason(str, Enum):
+    """Where exactly parsing/validation of a challenger response's ```json
+    fenced block gave up — finer-grained than `FailureReason` (whose
+    challenger side collapses every parse problem into
+    `challenger_format_invalid`).
+
+    Produced by `creative_rzero.utils.FormatValidator.validate_response`
+    (the first five), `steps/generate_prompts.py::validate_one_shot_response`
+    (the stricter one-shot checks), and the challenger reward caller's own
+    post-parse checks (the last two). Aggregated per run in
+    `generation_log["failure_reason_counts"]` and per rollout in the
+    challenger JSONL's `format_reason` column. Like `FailureReason`, this is
+    a `str` subclass so logged strings compare equal to members; producers
+    assign `.value` at serialization boundaries.
+    """
+
+    OK = "ok"
+
+    # FormatValidator.validate_response (shared by training + generation)
+    MISSING_JSON_FENCE = "missing_json_fence"
+    INVALID_JSON = "invalid_json"
+    TOP_LEVEL_NOT_DICT = "top_level_not_dict"
+    QUERY_NOT_STRING = "query_not_string"
+    NON_ENGLISH_QUERY = "non_english_query"
+
+    # validate_one_shot_response's stricter one-shot schema checks
+    MISSING_QUERY_OR_CRITERIA = "missing_query_or_criteria"
+    CRITERIA_NOT_LIST = "criteria_not_list"
+    CRITERION_NOT_DICT = "criterion_not_dict"
+    CRITERION_MISSING_FIELDS = "criterion_missing_fields"
+    CRITERION_MISSING_SCORE_LEVEL = "criterion_missing_score_level"
+
+    # creative_writing_caller.py post-parse checks (training reward path)
+    WRITING_PROMPT_FIELDS = "writing_prompt_fields"
+    EMPTY_QUERY_OR_CRITERIA = "empty_query_or_criteria"

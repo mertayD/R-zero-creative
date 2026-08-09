@@ -106,9 +106,16 @@ def test_build_challenger_parquet_schema_and_row_count(paths):
     assert list(train_df.columns) == CHALLENGER_COLUMNS
     assert len(train_df) == 3
     assert len(val_df) == 2
-    assert (train_df["answer"] == "").all()
     assert (train_df["challenger_init_model"] == cfg.challenger.model_path).all()
     assert (train_df["solver_oracle_model"] == cfg.solver.model_path).all()
+    # answer carries the logging-metadata payload (the challenger has no
+    # reference answer) — it must mirror the row's own columns.
+    for _, row in train_df.iterrows():
+        meta = json.loads(row["answer"])
+        assert meta["domain"] == row["domain"]
+        assert meta["domain_name"] == row["domain_name"]
+        assert meta["subdomain"] == row["subdomain"]
+        assert meta["problem"] == row["problem"]
 
 
 def test_build_challenger_parquet_is_deterministic_for_fixed_seed(paths):

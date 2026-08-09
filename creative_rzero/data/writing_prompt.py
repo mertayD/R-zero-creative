@@ -91,6 +91,12 @@ class PromptBatch:
     domains_sampled: List[str] = field(default_factory=list)
     subdomains_sampled: List[str] = field(default_factory=list)
     generation_log: Dict[str, Any] = field(default_factory=dict)
+    # Per-attempt failure records (reason + full raw response) from the
+    # generation retry loop. Deliberately excluded from to_dict(): the raw
+    # responses would bloat the prompts JSON, so run_generation writes them
+    # to a `.failures.jsonl` sidecar instead. Aggregate counts live in
+    # generation_log["failure_reason_counts"].
+    failures: List[Dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.generation_log:
@@ -102,6 +108,7 @@ class PromptBatch:
                 "network_failures": 0,
                 "format_validation_failures": 0,
                 "language_filter_failures": 0,
+                "failure_reason_counts": {},
             }
 
     def add_prompt(self, prompt: Optional[WritingPrompt], errors: Optional[List[Dict[str, Any]]] = None):

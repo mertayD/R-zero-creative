@@ -19,6 +19,7 @@ GPU-free config validation/tests).
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import random
@@ -31,7 +32,8 @@ from creative_rzero.config import ExperimentConfig
 from creative_rzero.data.writing_prompt import PromptBatch, QueryRequirements, WritingPrompt
 from creative_rzero.paths import RunPaths
 from creative_rzero.prompts.one_shot import ONE_SHOT_SYSTEM_PROMPT, render_one_shot_user_prompt
-from creative_rzero.utils import FormatValidator, is_english_output
+from creative_rzero.failure_reasons import FormatFailureReason
+from creative_rzero.utils import FormatValidator
 from evaluation.shared.utilities import split_thinking
 from question_generate.creative_writing_prompts import QUERY_REFINEMENT_GUIDANCE_POOL, WRITING_DOMAINS
 
@@ -114,7 +116,7 @@ def build_one_shot_prompt(domain_key: str, subdomain: str, language: str = "Engl
     return ONE_SHOT_SYSTEM_PROMPT, user_prompt, applied_guidance
 
 
-def validate_one_shot_response(response: str) -> tuple[bool, Optional[dict], str]:
+def validate_one_shot_response(response: str) -> tuple[bool, Optional[dict], str, str]:
     """
     Validate one-shot response format with full WritingBench criteria structure.
 
@@ -123,43 +125,43 @@ def validate_one_shot_response(response: str) -> tuple[bool, Optional[dict], str
     the generated prompt.
 
     Returns:
-        Tuple of (is_valid, parsed_json, thinking)
+        Tuple of (is_valid, parsed_json, thinking, failure_reason)
+        failure_reason: a `FormatFailureReason` value — "ok" when valid;
+        otherwise a FormatValidator reason or one of this layer's stricter
+        one-shot schema checks. generate_prompts_batch aggregates these into
+        generation_log["failure_reason_counts"] per run.
     """
     thinking, answer = split_thinking(response)
 
-    score, parsed = FormatValidator.validate_response(answer)
+    score, parsed, fmt_reason = FormatValidator.validate_response(answer)
     if score != 1:
-        return False, None, thinking
-
-    if not isinstance(parsed, dict):
-        logger.warning("Response is not a dict")
-        return False, None, thinking
+        return False, None, thinking, fmt_reason
 
     if "query" not in parsed or "criteria" not in parsed:
         logger.warning("Missing required fields: query or criteria")
-        return False, None, thinking
+        return False, None, thinking, FormatFailureReason.MISSING_QUERY_OR_CRITERIA.value
 
     criteria = parsed.get("criteria", [])
     if not isinstance(criteria, list) or len(criteria) == 0:
         logger.warning("Criteria is not a non-empty list")
-        return False, None, thinking
+        return False, None, thinking, FormatFailureReason.CRITERIA_NOT_LIST.value
 
     required_score_levels = ["1-2", "3-4", "5-6", "7-8", "9-10"]
     for criterion in criteria:
         if not isinstance(criterion, dict):
             logger.warning("Criterion is not a dict")
-            return False, None, thinking
+            return False, None, thinking, FormatFailureReason.CRITERION_NOT_DICT.value
 
         if "name" not in criterion or "criteria_description" not in criterion:
             logger.warning("Criterion missing name or criteria_description")
-            return False, None, thinking
+            return False, None, thinking, FormatFailureReason.CRITERION_MISSING_FIELDS.value
 
         for level in required_score_levels:
             if level not in criterion:
                 logger.warning(f"Criterion missing score level: {level}")
-                return False, None, thinking
+                return False, None, thinking, FormatFailureReason.CRITERION_MISSING_SCORE_LEVEL.value
 
-    return True, parsed, thinking
+    return True, parsed, thinking, FormatFailureReason.OK.value
 
 
 def generate_prompts_batch(
@@ -234,7 +236,7 @@ def generate_prompts_batch(
             total_attempts += 1
             # Qwen3 thinking-mode best practices (no greedy decoding). max_tokens
             # is generous because the reasoning trace precedes the JSON output;
-            # too small a budget truncates the <output> block and fails validation.
+            # too small a budget truncates the fenced JSON block and fails validation.
             sampling_params = vllm.SamplingParams(
                 max_tokens=32768,
                 temperature=0.6,
@@ -248,19 +250,30 @@ def generate_prompts_batch(
             completions = model.generate([prompt], sampling_params=sampling_params)
             response = completions[0].outputs[0].text
 
-            is_valid, parsed_json, thinking_trace = validate_one_shot_response(response)
-
-            if is_valid and not is_english_output(parsed_json.get('query', '')):
-                logger.warning("Non-English characters detected in query; retrying...")
-                batch.generation_log["language_filter_failures"] += 1
-                is_valid = False
+            is_valid, parsed_json, thinking_trace, fail_reason = validate_one_shot_response(response)
 
             if is_valid:
                 format_valid = True
             else:
+                counts = batch.generation_log.setdefault("failure_reason_counts", {})
+                counts[fail_reason] = counts.get(fail_reason, 0) + 1
+                if fail_reason == FormatFailureReason.NON_ENGLISH_QUERY.value:
+                    # validate_one_shot_response now rejects non-English queries
+                    # itself (via FormatValidator); keep the legacy counter fed
+                    # so existing generation_log consumers see the same field.
+                    batch.generation_log["language_filter_failures"] += 1
+                batch.failures.append({
+                    "slot": len(batch.prompts) + 1,
+                    "attempt": attempt + 1,
+                    "domain": domain_key,
+                    "subdomain": subdomain,
+                    "failure_reason": fail_reason,
+                    "thinking_chars": len(thinking_trace),
+                    "raw_response": response,
+                })
                 attempt += 1
                 if attempt < num_format_retries:
-                    print(f"  [{len(batch.prompts) + 1}/{num_prompts}] Format/language validation failed, retrying...")
+                    print(f"  [{len(batch.prompts) + 1}/{num_prompts}] Validation failed ({fail_reason}), retrying...")
 
         if format_valid:
             prompt_counter += 1
@@ -387,6 +400,14 @@ def run_generation(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(batch.to_json())
 
+    # Failed attempts (with full raw responses) go to a sidecar JSONL next to
+    # the prompts JSON — kept out of batch.to_json() so the prompts file stays
+    # small enough to eyeball, while nothing about a failure is lost.
+    failures_path = out_path.with_suffix(".failures.jsonl")
+    if batch.failures:
+        with open(failures_path, "w") as f:
+            f.write("\n".join(json.dumps(r) for r in batch.failures) + "\n")
+
     log = batch.generation_log
     total_criteria = sum(len(p.criteria) for p in batch.prompts)
     avg_criteria = total_criteria / len(batch.prompts) if batch.prompts else 0
@@ -401,8 +422,15 @@ def run_generation(
     print(f"  Skipped: {log['skipped']}")
     print(f"  Format validation failures: {log['format_validation_failures']}")
     print(f"  Language filter failures:   {log['language_filter_failures']}")
+    reason_counts = log.get("failure_reason_counts", {})
+    if reason_counts:
+        print("  Failed attempts by reason:")
+        for reason, count in sorted(reason_counts.items(), key=lambda kv: -kv[1]):
+            print(f"    {reason}: {count}")
     print(f"\nOutput:")
     print(f"  File: {out_path}")
+    if batch.failures:
+        print(f"  Failures: {failures_path}")
 
     if _wandb_active():
         metrics = {
@@ -417,11 +445,24 @@ def run_generation(
             "prompt_gen/unique_domains": len(batch.domains_sampled),
             "prompt_gen/unique_subdomains": len(batch.subdomains_sampled),
         }
+        for reason, count in reason_counts.items():
+            metrics[f"prompt_gen/failure_reason/{reason}"] = count
         if batch.prompts:
             table = _wandb.Table(columns=["prompt_id", "domain", "subdomain", "query_preview", "num_criteria", "num_guidance"])
             for p in batch.prompts:
                 table.add_data(p.prompt_id, p.domain, p.subdomain, p.query[:150], len(p.criteria), len(p.guidance_applied))
             metrics["prompt_gen/prompts"] = table
+        if batch.failures:
+            fail_table = _wandb.Table(
+                columns=["slot", "attempt", "domain", "subdomain", "failure_reason", "thinking_chars", "response_preview"]
+            )
+            for r in batch.failures:
+                # Preview only — the full raw_response lives in failures_path.
+                fail_table.add_data(
+                    r["slot"], r["attempt"], r["domain"], r["subdomain"],
+                    r["failure_reason"], r["thinking_chars"], r["raw_response"][:600],
+                )
+            metrics["prompt_gen/failures"] = fail_table
         _wandb.log(metrics, step=_coevolve_iter)
         if _wandb_owned:
             _wandb.finish()

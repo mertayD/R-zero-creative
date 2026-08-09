@@ -1,9 +1,8 @@
 from creative_rzero.prompts.one_shot import ONE_SHOT_SYSTEM_PROMPT, render_one_shot_user_prompt
 
 
-def test_system_prompt_requires_output_tags():
-    assert "<output>" in ONE_SHOT_SYSTEM_PROMPT
-    assert "</output>" in ONE_SHOT_SYSTEM_PROMPT
+def test_system_prompt_requires_json_fence():
+    assert "```json" in ONE_SHOT_SYSTEM_PROMPT
 
 
 def test_render_one_shot_user_prompt_embeds_all_inputs():
@@ -20,7 +19,7 @@ def test_render_one_shot_user_prompt_embeds_all_inputs():
     assert "short story" in rendered
     assert "show, don't tell" in rendered
     assert "French" in rendered
-    assert "<output>" in rendered and "</output>" in rendered
+    assert "```json" in rendered
 
 
 def test_render_one_shot_user_prompt_defaults_to_english():

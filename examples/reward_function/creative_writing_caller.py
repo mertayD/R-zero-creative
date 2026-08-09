@@ -2,12 +2,12 @@
 Creative writing challenger reward function for VERL GRPO training.
 
 Called by VERL at each training step with the challenger model's generated outputs.
-Each predict string must contain a <output>...</output> JSON block with fields:
+Each predict string must contain a ```json ... ``` fenced block with fields:
   - query:    the creative writing prompt
   - criteria: list of 5 evaluation criterion dicts
 
 Reward pipeline:
-  1. Parse all <output> JSONs (format validation)
+  1. Parse all fenced JSONs (format validation)
   2. Batch-query vLLM solver (single POST with list of prompts)
   3. Strip <think> traces; score only the final answers via BatchEvalAgent (Claude API)
   4. Compute R-Zero uncertainty via compute_writing_reward
@@ -21,8 +21,10 @@ Solver generation uses Qwen3 thinking-mode best practices:
 
 Interface matches caller_penalty.py exactly:
   compute_score(predicts, ground_truths) -> List[Dict[str, float]]
-  ground_truths is required by the VERL reward function interface but unused
-  here — creative writing reward comes from the Claude judge, not a reference answer.
+  The creative writing reward comes from the Claude judge, not a reference
+  answer, so ground_truths carries no reference — build_challenger_parquet
+  packs a JSON metadata payload (domain/subdomain/input prompt) into it,
+  consumed only by the per-rollout logger below.
 """
 
 import json
@@ -43,7 +45,7 @@ for _p in (_REPO, _WB_DIR):
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 
 from creative_rzero.data.writing_prompt import WritingPrompt
-from creative_rzero.failure_reasons import FailureReason
+from creative_rzero.failure_reasons import FailureReason, FormatFailureReason
 from creative_rzero.utils import FormatValidator
 from evaluation.shared.rewards import compute_writing_reward
 from evaluation.shared.utilities import split_thinking
@@ -52,10 +54,10 @@ from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
 # failure_reason taxonomy — every sample gets exactly one. Canonical values
 # live in creative_rzero/failure_reasons.py:FailureReason —
 #   ok                         — scored normally
-#   truncated                  — <output>…</output> JSON never parsed, and the
+#   truncated                  — fenced JSON never parsed, and the
 #                                 response looks cut off by max_response_length
 #                                 (model "couldn't finish", not "wrote garbage")
-#   challenger_format_invalid  — <output>…</output> JSON never parsed, and it
+#   challenger_format_invalid  — fenced JSON never parsed, and it
 #                                 does not look truncated
 #   solver_api_error           — challenger parsed fine, but the vLLM solver
 #                                 batch call failed (no solver_text to score)
@@ -84,12 +86,13 @@ def _looks_truncated(text: str, max_response_length: int) -> bool:
     """Best-effort truncation detector from decoded text alone.
 
     True when the response is within a few tokens' worth of characters of
-    max_response_length, or an <output> block was opened but never closed.
+    max_response_length, or a ``` fence was opened but never closed (an odd
+    number of fence markers means the closing fence never arrived).
     """
     approx_tokens = len(text) / _APPROX_CHARS_PER_TOKEN
     if approx_tokens >= max_response_length - _TRUNCATION_MARGIN_TOKENS:
         return True
-    return "<output>" in text and "</output>" not in text
+    return text.count("```") % 2 == 1
 
 # Qwen3 thinking-mode sampling best practices (generation_config.json defaults).
 # DO NOT use greedy decoding — it causes repetition/degradation in thinking mode.
@@ -131,7 +134,17 @@ def _get_wandb():
 # Schema per line:
 #   step                  — monotonic call counter
 #   rollout_idx           — position in the batch
-#   format_valid          — 1 if <output>JSON</output> parsed, 0 otherwise
+#   domain                — domain key of the input prompt (from ground_truth metadata)
+#   domain_name           — human-readable domain name
+#   subdomain             — subdomain of the input prompt
+#   input_prompt          — full user prompt the challenger was trained on (parquet `problem`)
+#   raw_output            — full untruncated challenger rollout, verbatim (the
+#                            only place the raw text survives when parsing fails)
+#   format_valid          — 1 if the ```json fenced block parsed, 0 otherwise
+#   format_reason         — "ok", a FormatValidator reason (missing_json_fence /
+#                            invalid_json / top_level_not_dict / query_not_string /
+#                            non_english_query), or this file's writing_prompt_fields /
+#                            empty_query_or_criteria — where exactly parsing gave up
 #   challenger_thinking   — full <think> reasoning trace the challenger produced (empty if none)
 #   generated_query       — first 300 chars of the writing prompt the challenger wrote
 #   generated_criteria_n  — number of criteria in the generated prompt
@@ -141,6 +154,11 @@ def _get_wandb():
 #   format                — 1.0 = valid XML+JSON, 0.0 = parse failure
 #   accuracy              — avg criterion score / 10
 #
+# domain/subdomain/input_prompt come from the parquet `answer` column, which
+# build_challenger_parquet fills with a JSON metadata payload (the challenger
+# has no reference answer, so ground_truth is a metadata channel — same
+# packing convention as the solver's WritingPrompt-in-answer).
+#
 # The file is uploaded to W&B as a Table by creative_challenger_smoke.sh after
 # training completes.
 # ---------------------------------------------------------------------------
@@ -148,12 +166,15 @@ _challenger_step: int = 0
 
 
 def _log_challenger_rollouts(
+    predicts: List[str],
+    metadata: List[dict],
     parsed: List[Optional[WritingPrompt]],
     challenger_thinking: List[str],
     solver_texts: Dict[int, str],
     solver_thinking: Dict[int, str],
     scores: List[Dict[str, float]],
     failure_reasons: List[str],
+    format_reasons: List[str],
 ) -> None:
     global _challenger_step
     _challenger_step += 1
@@ -166,10 +187,17 @@ def _log_challenger_rollouts(
 
     entries: List[str] = []
     for idx, wp in enumerate(parsed):
+        meta = metadata[idx]
         entry = {
             "step":                 _challenger_step,
             "rollout_idx":          idx,
+            "domain":               meta.get("domain", ""),
+            "domain_name":          meta.get("domain_name", ""),
+            "subdomain":            meta.get("subdomain", ""),
+            "input_prompt":         meta.get("problem", ""),
+            "raw_output":           predicts[idx],
             "format_valid":         1 if wp is not None else 0,
+            "format_reason":        format_reasons[idx],
             "challenger_thinking":  challenger_thinking[idx],
             "generated_query":      wp.query[:300] if wp is not None else "",
             "generated_criteria_n": len(wp.criteria) if wp is not None else 0,
@@ -302,13 +330,25 @@ def compute_score(
     Compute R-Zero uncertainty rewards for challenger-generated creative prompts.
 
     Args:
-        predicts:      Challenger model outputs (each must contain <output>…</output> JSON).
-        ground_truths: Unused — required by VERL reward function interface.
+        predicts:      Challenger model outputs (each must contain a ```json fenced block).
+        ground_truths: JSON metadata payloads packed by build_challenger_parquet
+                       (domain/domain_name/subdomain/problem) — used only for
+                       rollout logging, never for the reward.
 
     Returns:
         List of {"overall": float, "format": float, "accuracy": float} dicts.
     """
     agent = _get_agent()
+
+    # ground_truth metadata is a logging channel; tolerate legacy parquets
+    # where answer is "" (or anything unparseable) rather than crash a run.
+    metadata: List[dict] = []
+    for gt in ground_truths:
+        try:
+            meta = json.loads(gt) if gt else {}
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        metadata.append(meta if isinstance(meta, dict) else {})
 
     # --- Step 1: parse all predicts into WritingPrompt objects ---
     # Challenger rollouts are thinking-mode: split off the <think>…</think>
@@ -318,12 +358,16 @@ def compute_score(
     parsed: List[Optional[WritingPrompt]] = []
     challenger_thinking: List[str] = []
     failure_reasons: List[str] = [FailureReason.OK.value] * len(predicts)
+    # Fine-grained parse outcome per rollout (FormatFailureReason values) —
+    # logged so per-run failure hotspots are visible.
+    format_reasons: List[str] = [FormatFailureReason.OK.value] * len(predicts)
     for i, predict in enumerate(predicts):
         thinking, answer = split_thinking(predict)
         challenger_thinking.append(thinking)
-        fmt, p = FormatValidator.validate_response(answer)
+        fmt, p, fmt_reason = FormatValidator.validate_response(answer)
         if fmt != 1:
             parsed.append(None)
+            format_reasons[i] = fmt_reason
             failure_reasons[i] = (
                 FailureReason.TRUNCATED.value
                 if _looks_truncated(predict, _CHALLENGER_MAX_RESPONSE_LENGTH)
@@ -335,12 +379,14 @@ def compute_score(
         except Exception as e:
             print(f"[creative_writing_caller] WritingPrompt.from_dict failed: {e}", flush=True)
             parsed.append(None)
+            format_reasons[i] = FormatFailureReason.WRITING_PROMPT_FIELDS.value
             failure_reasons[i] = FailureReason.CHALLENGER_FORMAT_INVALID.value
             continue
         if wp.query.strip() and wp.criteria:
             parsed.append(wp)
         else:
             parsed.append(None)
+            format_reasons[i] = FormatFailureReason.EMPTY_QUERY_OR_CRITERIA.value
             failure_reasons[i] = FailureReason.CHALLENGER_FORMAT_INVALID.value
 
     # --- Step 2: batch vLLM query for all valid predicts ---
@@ -392,7 +438,8 @@ def compute_score(
 
     try:
         _log_challenger_rollouts(
-            parsed, challenger_thinking, solver_texts, solver_thinking, scores, failure_reasons
+            predicts, metadata, parsed, challenger_thinking,
+            solver_texts, solver_thinking, scores, failure_reasons, format_reasons,
         )
     except Exception as _log_err:
         print(f"[creative_writing_caller] rollout logging failed: {_log_err}", flush=True)

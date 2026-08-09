@@ -30,8 +30,11 @@ def build_challenger_parquet(cfg: ExperimentConfig, paths: RunPaths) -> Tuple[Pa
 
     Row schema (unchanged from creative_challenger_smoke.sh Step 0): problem,
     answer, domain, domain_name, subdomain, seed, iteration, run_id,
-    challenger_init_model, solver_oracle_model. `answer` is always "" — the
-    challenger's reward function ignores ground_truth entirely.
+    challenger_init_model, solver_oracle_model. The challenger has no
+    reference answer, so `answer` carries a JSON metadata payload instead
+    (same convention as the solver's WritingPrompt-in-answer): verl forwards
+    it to the reward function as ground_truth, where it feeds the per-rollout
+    log — it never affects the reward itself.
     """
     sampler = DomainSampler(seed=cfg.run.seed)
 
@@ -41,7 +44,12 @@ def build_challenger_parquet(cfg: ExperimentConfig, paths: RunPaths) -> Tuple[Pa
         _, user_prompt, _ = build_one_shot_prompt(domain_key, subdomain)
         return {
             "problem": user_prompt,
-            "answer": "",
+            "answer": json.dumps({
+                "domain": domain_key,
+                "domain_name": domain_name,
+                "subdomain": subdomain,
+                "problem": user_prompt,
+            }),
             "domain": domain_key,
             "domain_name": domain_name,
             "subdomain": subdomain,

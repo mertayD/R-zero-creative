@@ -20,17 +20,23 @@ def test_find_cjk_matches_empty_for_pure_english():
 
 
 def _wrap(payload: dict) -> str:
-    return f"<output>{json.dumps(payload)}</output>"
+    return f"```json\n{json.dumps(payload)}\n```"
 
 
-def test_validate_output_tags_extracts_inner_text():
-    ok, extracted = FormatValidator.validate_output_tags("noise <output> {\"a\": 1} </output> trailing")
+def test_validate_json_fence_extracts_inner_text():
+    ok, extracted = FormatValidator.validate_json_fence('noise ```json\n{"a": 1}\n``` trailing')
     assert ok is True
     assert extracted == '{"a": 1}'
 
 
-def test_validate_output_tags_missing_tags():
-    ok, extracted = FormatValidator.validate_output_tags("no tags here")
+def test_validate_json_fence_accepts_bare_fence_without_language_tag():
+    ok, extracted = FormatValidator.validate_json_fence('```\n{"a": 1}\n```')
+    assert ok is True
+    assert extracted == '{"a": 1}'
+
+
+def test_validate_json_fence_missing_fence():
+    ok, extracted = FormatValidator.validate_json_fence("no fence here")
     assert ok is False
     assert extracted == ""
 
@@ -43,44 +49,51 @@ def test_validate_json_valid_and_invalid():
 
 
 def test_validate_response_valid_dict_with_string_query():
-    score, parsed = FormatValidator.validate_response(_wrap({"query": "write a story"}))
+    score, parsed, reason = FormatValidator.validate_response(_wrap({"query": "write a story"}))
     assert score == 1
     assert parsed == {"query": "write a story"}
+    assert reason == "ok"
 
 
-def test_validate_response_missing_tags_is_invalid():
-    score, parsed = FormatValidator.validate_response("no output tags")
+def test_validate_response_missing_fence_is_invalid():
+    score, parsed, reason = FormatValidator.validate_response("no json fence")
     assert score == -1
     assert parsed is None
+    assert reason == "missing_json_fence"
 
 
 def test_validate_response_invalid_json_is_invalid():
-    score, parsed = FormatValidator.validate_response("<output>not json</output>")
+    score, parsed, reason = FormatValidator.validate_response("```json\nnot json\n```")
     assert score == -1
     assert parsed is None
+    assert reason == "invalid_json"
 
 
 def test_validate_response_non_dict_top_level_is_invalid():
-    score, parsed = FormatValidator.validate_response(_wrap(["a", "list"]))
+    score, parsed, reason = FormatValidator.validate_response(_wrap(["a", "list"]))
     assert score == -1
     assert parsed is None
+    assert reason == "top_level_not_dict"
 
 
 def test_validate_response_non_string_query_is_invalid():
-    score, parsed = FormatValidator.validate_response(_wrap({"query": {"nested": True}}))
+    score, parsed, reason = FormatValidator.validate_response(_wrap({"query": {"nested": True}}))
     assert score == -1
     assert parsed is None
+    assert reason == "query_not_string"
 
 
 def test_validate_response_non_english_query_is_invalid():
-    score, parsed = FormatValidator.validate_response(_wrap({"query": "写一个故事"}))
+    score, parsed, reason = FormatValidator.validate_response(_wrap({"query": "写一个故事"}))
     assert score == -1
     assert parsed is None
+    assert reason == "non_english_query"
 
 
 def test_validate_response_allows_missing_query_field():
     # query is optional at this layer — validate_one_shot_response (a stricter,
     # generation-specific check) is what requires it.
-    score, parsed = FormatValidator.validate_response(_wrap({"other": "field"}))
+    score, parsed, reason = FormatValidator.validate_response(_wrap({"other": "field"}))
     assert score == 1
     assert parsed == {"other": "field"}
+    assert reason == "ok"

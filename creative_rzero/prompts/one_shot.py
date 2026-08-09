@@ -13,10 +13,10 @@ from __future__ import annotations
 ONE_SHOT_SYSTEM_PROMPT = """You are an expert writing task generator with deep knowledge of diverse writing domains and subdomains.
 
 CRITICAL FORMATTING RULES:
-1. You MUST wrap your entire response in <output> and </output> tags
-2. Inside the tags, return ONLY valid JSON (no markdown, no code blocks, no explanations)
-3. Do NOT include any text before the <output> tag
-4. Do NOT include any text after the </output> tag
+1. You MUST wrap your entire response in a ```json fenced code block
+2. Inside the fence, return ONLY valid JSON (no explanations, no extra prose)
+3. Do NOT include any text before the opening ```json fence
+4. Do NOT include any text after the closing ``` fence
 5. Do NOT use unescaped quotes inside JSON strings
 6. Your response MUST be parseable as valid JSON
 
@@ -82,8 +82,8 @@ Look for and identify any:
 - Format requirements (e.g., structure, template, outline)
 - Length requirements (e.g., word count, page count, character limits)
 
-OUTPUT STAGE - Return ONLY this JSON format (nothing else):
-<output>
+OUTPUT STAGE - Return ONLY this JSON format wrapped in a ```json fenced code block:
+```json
 {{
   "query": "Your detailed, polished, specific writing prompt that reflects the refinement principles",
   "criteria": [
@@ -139,10 +139,11 @@ OUTPUT STAGE - Return ONLY this JSON format (nothing else):
     "length": "Length requirement if explicitly mentioned, null otherwise"
   }}
 }}
-</output>
+```
 
 CRITICAL REMINDERS:
 - Do NOT output your internal reasoning. Only output the JSON block.
+- Use a ```json fenced code block to wrap the JSON output.
 - Ensure the query is specific and detailed, reflecting the refinement principles you applied.
 - Each 5 criterion must have all 5 score levels (1-2, 3-4, 5-6, 7-8, 9-10) with detailed descriptions.
 - Be strict in criteria design to distinguish subtle differences in quality.

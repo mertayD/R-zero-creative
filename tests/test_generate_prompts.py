@@ -49,7 +49,7 @@ def test_build_one_shot_prompt_embeds_domain_and_subdomain():
 
     # system_prompt is the fixed constant from creative_rzero.prompts.one_shot
     assert system_prompt is ONE_SHOT_SYSTEM_PROMPT
-    assert "<output>" in user_prompt
+    assert "```json" in user_prompt
     assert "short story" in user_prompt
     assert WRITING_DOMAINS["D1"]["name"] in user_prompt
     assert 1 <= len(applied_guidance) <= len(QUERY_REFINEMENT_GUIDANCE_POOL)
@@ -70,49 +70,54 @@ def _valid_payload(query="write a detailed story about a lighthouse keeper"):
 
 
 def _wrap(payload: dict) -> str:
-    return f"<output>{json.dumps(payload)}</output>"
+    return f"```json\n{json.dumps(payload)}\n```"
 
 
 def test_validate_one_shot_response_accepts_well_formed_output():
-    is_valid, parsed, thinking = validate_one_shot_response(_wrap(_valid_payload()))
+    is_valid, parsed, thinking, reason = validate_one_shot_response(_wrap(_valid_payload()))
 
     assert is_valid is True
     assert parsed["query"].startswith("write a detailed story")
     assert thinking == ""
+    assert reason == "ok"
 
 
 def test_validate_one_shot_response_strips_leading_think_block():
     text = "<think>let me plan this out</think>" + _wrap(_valid_payload())
 
-    is_valid, parsed, thinking = validate_one_shot_response(text)
+    is_valid, parsed, thinking, reason = validate_one_shot_response(text)
 
     assert is_valid is True
     assert thinking == "let me plan this out"
+    assert reason == "ok"
 
 
 def test_validate_one_shot_response_rejects_missing_criteria():
     payload = _valid_payload()
     del payload["criteria"]
 
-    is_valid, parsed, _ = validate_one_shot_response(_wrap(payload))
+    is_valid, parsed, _, reason = validate_one_shot_response(_wrap(payload))
 
     assert is_valid is False
     assert parsed is None
+    assert reason == "missing_query_or_criteria"
 
 
 def test_validate_one_shot_response_rejects_criterion_missing_score_level():
     payload = _valid_payload()
     del payload["criteria"][0]["7-8"]
 
-    is_valid, parsed, _ = validate_one_shot_response(_wrap(payload))
+    is_valid, parsed, _, reason = validate_one_shot_response(_wrap(payload))
 
     assert is_valid is False
+    assert reason == "criterion_missing_score_level"
 
 
 def test_validate_one_shot_response_rejects_non_english_query():
-    is_valid, parsed, _ = validate_one_shot_response(_wrap(_valid_payload(query="写一个故事")))
+    is_valid, parsed, _, reason = validate_one_shot_response(_wrap(_valid_payload(query="写一个故事")))
 
     assert is_valid is False
+    assert reason == "non_english_query"
 
 
 # =============================================================================
@@ -185,6 +190,10 @@ def test_generate_prompts_batch_gives_up_on_a_slot_after_max_retries():
     # The exhausted slot never calls add_prompt, so it contributes 0 to
     # total_attempted — only the slot that eventually succeeded does.
     assert batch.generation_log["total_attempted"] == 1
+    # Per-attempt reasons: both bad responses lacked a ```json fence entirely.
+    assert batch.generation_log["failure_reason_counts"] == {"missing_json_fence": 2}
+    assert [f["failure_reason"] for f in batch.failures] == ["missing_json_fence"] * 2
+    assert batch.failures[0]["raw_response"] == "bad"
 
 
 def test_generate_prompts_batch_stops_at_attempt_cap_when_model_never_succeeds():
@@ -206,15 +215,20 @@ def test_generate_prompts_batch_stops_at_attempt_cap_when_model_never_succeeds()
     assert batch.generation_log["total_attempted"] == 0
 
 
-# NOTE: generate_prompts_batch's own inline check
-# `if is_valid and not is_english_output(parsed_json.get('query', ''))` (and
-# the language_filter_failures counter it feeds) is unreachable in practice:
-# validate_one_shot_response -> FormatValidator.validate_response already
-# rejects a non-English `query` and returns is_valid=False before that second
-# check ever runs — see test_validate_one_shot_response_rejects_non_english_query
-# above, which exercises the same input at the layer that actually catches it.
-# Flagging here rather than deleting the dead branch — not touching behavior
-# beyond the file consolidation.
+def test_generate_prompts_batch_keeps_language_filter_counter_fed_via_reason():
+    # The old inline is_english_output() re-check in the loop was dead code
+    # (FormatValidator already rejects non-English queries) and has been
+    # removed; the legacy language_filter_failures counter is now fed off
+    # failure_reason == "non_english_query" instead.
+    responses = [_wrap(_valid_payload(query="写一个故事")), _wrap(_valid_payload())]
+
+    batch = generate_prompts_batch(
+        _FakeLLM(responses), _FakeTokenizer(), num_prompts=1, num_format_retries=2, seed=1
+    )
+
+    assert len(batch.prompts) == 1
+    assert batch.generation_log["language_filter_failures"] == 1
+    assert batch.generation_log["failure_reason_counts"] == {"non_english_query": 1}
 
 
 # =============================================================================
