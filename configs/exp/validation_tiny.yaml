@@ -43,4 +43,4 @@ verl:
       gpu_memory_utilization: 0.6
   trainer:
     n_gpus_per_node: 1
-    logger: ["console"]           # W&B optional for validation; console always
+    logger: ["console", "wandb"]  # W&B active only when WANDB_API_KEY is in .env at launch

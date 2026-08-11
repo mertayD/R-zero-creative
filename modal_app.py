@@ -249,6 +249,77 @@ def coevolve(config: str, overrides: list[str] = []) -> list[str]:
     return list(final)
 
 
+@app.function(
+    image=image,
+    volumes={REMOTE_STORAGE_PATH: volume},
+    secrets=[runtime_secret],
+    timeout=1800,
+    env={"PYTHONUNBUFFERED": "1"},
+)
+def preflight(config: str, overrides: list[str] = []) -> str:
+    """CPU-only wiring check — everything that can fail *before* GPU spend:
+
+      1. typed config load + validation
+      2. materialized verl YAML for both roles merges cleanly into verl's own
+         PPOConfig schema (an unknown key here would crash an hour into a run)
+      3. the reward entrypoint imports the real caller chain the way verl
+         loads it, with the config-to-env bridge applied
+      4. the judge client constructs (catches a missing PERPLEXITY_API_KEY)
+    """
+    import importlib.util
+
+    storage = _container_setup()
+    results = []
+
+    from creative_rzero.config import load, save_resolved
+    from creative_rzero.paths import RunPaths
+    from creative_rzero.steps.train_verl import materialize_verl_config
+
+    cfg = load(config, cli_args=list(overrides))
+    results.append(f"[1] config load ok (abbr={cfg.run.abbr}, profile={cfg.run.profile})")
+
+    tmp = "/tmp/preflight"
+    paths = RunPaths(storage, cfg.run.abbr, "preflight", 1)
+
+    from omegaconf import OmegaConf
+    from verl.trainer.config import PPOConfig
+
+    for role in ("challenger", "solver"):
+        yaml_path = materialize_verl_config(cfg, paths, role, tmp)
+        merged = OmegaConf.merge(OmegaConf.structured(PPOConfig()), OmegaConf.load(yaml_path))
+        ppo = OmegaConf.to_object(merged)
+        ppo.deep_post_init()
+        assert ppo.worker.reward.reward_function is not None, "reward_function nulled by post_init"
+        assert ppo.worker.reward.reward_function_kwargs == {"role": role}
+        results.append(f"[2] verl PPOConfig schema ok ({role}): {yaml_path}")
+
+    resolved = save_resolved(cfg, tmp)
+    os.environ["EXPERIMENT_CONFIG_PATH"] = str(resolved)
+    entry_path = f"{REMOTE_REPO_PATH}/creative_rzero/rewards/verl_entry.py"
+    spec = importlib.util.spec_from_file_location("custom_reward_fn", entry_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # exactly how verl's FunctionRewardManager loads it
+    for role in ("challenger", "solver"):
+        impl = module._get_impl(role)
+        results.append(f"[3] reward impl import ok ({role}): {impl.__module__}")
+
+    from evaluation.writing_bench.evaluator.llm import ClaudeAgent
+
+    agent = ClaudeAgent("preflight")
+    results.append(f"[4] judge client ok (model={agent.model})")
+
+    report = "\n".join(results)
+    print(report)
+    return report
+
+
+@app.local_entrypoint()
+def preflight_check(config: str = "configs/exp/validation_tiny.yaml", set: str = ""):  # noqa: A002
+    """Run the CPU wiring check: modal run modal_app.py::preflight_check"""
+    overrides = [s.strip() for s in set.split(",") if s.strip()]
+    print(preflight.remote(config, overrides))
+
+
 @app.local_entrypoint()
 def main(config: str = "configs/exp/validation_tiny.yaml", set: str = ""):  # noqa: A002 — Modal CLI arg name
     """Validate the config locally (fail in seconds, not after a container
