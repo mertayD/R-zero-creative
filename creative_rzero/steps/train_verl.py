@@ -91,6 +91,22 @@ def materialize_verl_config(
     verl_cfg["worker"]["actor"]["global_batch_size"] = role_cfg.num_train
     verl_cfg["worker"]["rollout"]["n"] = role_cfg.rollout_n
 
+    reward = verl_cfg["worker"]["reward"]
+    # Which reward implementation verl_entry.py dispatches to — passed through
+    # the config (visible in the materialized YAML), not an env var or a
+    # role-specific filename (REFACTOR_PLAN T3.6).
+    reward["reward_function_kwargs"] = {"role": role}
+    # Absolutize `./path.py:fn` — verl's RewardConfig.post_init silently sets
+    # reward_function to None when the (cwd-relative) path doesn't exist,
+    # which would surface as a confusing "Reward function is not provided"
+    # crash in a worker instead of a bad-path error here.
+    fn_path, _, fn_name = reward["reward_function"].rpartition(":")
+    fn_path = fn_path or fn_name  # no ":fn" suffix given
+    abs_path = (REPO_ROOT / fn_path).resolve() if not Path(fn_path).is_absolute() else Path(fn_path)
+    if not abs_path.exists():
+        raise FileNotFoundError(f"worker.reward.reward_function does not exist: {abs_path}")
+    reward["reward_function"] = f"{abs_path}:{fn_name}" if fn_path != fn_name else str(abs_path)
+
     trainer = verl_cfg["trainer"]
     trainer["experiment_name"] = paths.save_name(role)
     trainer["save_checkpoint_path"] = str(paths.checkpoint_root(role))
