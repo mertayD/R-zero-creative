@@ -49,6 +49,7 @@ class RunConfig:
     abbr: Optional[str] = None  # required, set per run
     profile: str = "smoke"  # dryrun | smoke | small | full
     seed: int = 42
+    num_iters: int = 1  # co-evolution rounds (challenger phase + solver phase each)
 
 
 @dataclass
@@ -121,6 +122,8 @@ def _validate(config: ExperimentConfig) -> None:
         errors.append("run.abbr is required (short name used to build checkpoint/run directory names)")
     if config.run.profile not in VALID_PROFILES:
         errors.append(f"run.profile={config.run.profile!r} must be one of {VALID_PROFILES}")
+    if config.run.num_iters < 1:
+        errors.append(f"run.num_iters must be >= 1, got {config.run.num_iters}")
 
     for role in ("challenger", "solver"):
         role_cfg = getattr(config, role)
