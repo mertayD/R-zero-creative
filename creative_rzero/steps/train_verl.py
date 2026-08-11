@@ -48,9 +48,33 @@ _FORWARDED_ENV_VARS = (
     "WANDB_RUN_ID",
     "WANDB_RUN_GROUP",
     "ANTHROPIC_API_KEY",
+    # The Claude judge is reached through the Perplexity gateway
+    # (evaluation/writing_bench/evaluator/llm.py) — without this key every
+    # judge call inside the training subprocess dies at ClaudeAgent.__init__.
+    "PERPLEXITY_API_KEY",
+    # The legacy reward callers build their sys.path from this (they default
+    # to /root/R-Zero, wrong anywhere but the Modal container).
+    "REMOTE_REPO_PATH",
     "HF_TOKEN",
     "HF_HOME",
+    "HUGGINGFACE_HUB_CACHE",
     "HF_HUB_ENABLE_HF_TRANSFER",
+    # GPU-runtime stability settings the Modal functions set at the container
+    # level (modal_app.py GPU_RUNTIME_ENV). The training subprocess is where
+    # they actually matter — vLLM rollout workers and NCCL run under it — so
+    # dropping them here silently reverted the container tuning.
+    "VLLM_DISABLE_COMPILE_CACHE",
+    "VLLM_LOGGING_LEVEL",
+    "TORCHINDUCTOR_MAX_AUTOTUNE",
+    "TOKENIZERS_PARALLELISM",
+    "NCCL_DEBUG",
+    "TORCH_NCCL_AVOID_RECORD_STREAMS",
+    "PYTORCH_CUDA_ALLOC_CONF",
+    "PYTHONUNBUFFERED",
+    # The challenger reward caller queries the vLLM solver oracle on
+    # 127.0.0.1 — a proxy'd environment without these breaks every call.
+    "NO_PROXY",
+    "no_proxy",
 )
 _TAIL_LINES = 50
 
