@@ -1,0 +1,49 @@
+# T2.9 validation run — the smallest configuration that exercises every stage
+# of the pipeline end-to-end (parquet -> vLLM oracle -> verl GRPO -> judge ->
+# merge -> next phase) while spending minimal GPU/judge budget.
+#
+# Sized for CREATIVE_GPU="A100-40GB:2": verl trains on GPU 0
+# (n_gpus_per_node: 1), the vLLM solver oracle / prompt generation uses GPU 1.
+run:
+  abbr: t29-validation-tiny
+  profile: smoke
+  num_iters: 1
+
+challenger:
+  model_path: Qwen/Qwen3-0.6B     # smallest Qwen3 — wiring validation, not quality
+  max_steps: 2
+  rollout_n: 2                    # minimum meaningful group size
+  num_train: 2
+  num_val: 1
+  max_response_length: 2048
+  solver_query:
+    max_tokens: 2048              # oracle responses don't need the full 32k budget here
+
+solver:
+  model_path: Qwen/Qwen3-0.6B
+  max_steps: 2
+  rollout_n: 2
+  num_train: 2
+  num_val: 1
+  max_response_length: 2048
+
+judge:
+  type: sft-critic                      # random scores, no Perplexity/Claude call — this run is wiring validation, not judge quality
+  critic_url: https://columbia-daplab--r-zero-creative-critic-judge-server.modal.run
+  critic_model: writingbench-critic-qwen-7b
+  max_workers: 2                  # only ~4 concurrent samples exist at this size
+
+verl:
+  data:
+    # Qwen3 chat templates default to thinking mode; keep it off so tiny
+    # response budgets go to the answer (matches T1.10's "thinking disabled
+    # today" assumption).
+    apply_chat_template_kwargs:
+      enable_thinking: false
+  worker:
+    rollout:
+      tensor_parallel_size: 1     # single training GPU
+      gpu_memory_utilization: 0.6
+  trainer:
+    n_gpus_per_node: 1
+    logger: ["console", "wandb"]  # W&B active only when WANDB_API_KEY is in .env at launch
