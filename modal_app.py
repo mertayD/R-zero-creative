@@ -57,11 +57,13 @@ HUGGINGFACENAME     = os.getenv("HUGGINGFACENAME", "")
 
 # sft-critic judge service (judge.type=sft-critic, REFACTOR_PLAN.md §6) —
 # deployed independently of any training run, see critic_judge_server below.
+# No auth: only we deploy this, and it's only ever up for the span of a
+# training run (min_containers=0 + scaledown_window below scale it back to
+# zero shortly after), not a long-lived public service.
 CRITIC_MODEL_ID              = "AQuarterMile/WritingBench-Critic-Model-Qwen-7B"
 CRITIC_SERVED_NAME           = os.getenv("CRITIC_SERVED_NAME", "writingbench-critic-qwen-7b")
 CRITIC_JUDGE_GPU             = os.getenv("CRITIC_JUDGE_GPU", "L4")
 CRITIC_JUDGE_SCALEDOWN_WINDOW_S = int(os.getenv("CRITIC_JUDGE_SCALEDOWN_WINDOW_S", "900"))
-CRITIC_JUDGE_API_KEY         = os.environ.get("CRITIC_JUDGE_API_KEY", "")
 
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
@@ -143,13 +145,6 @@ runtime_secret = modal.Secret.from_dict({
     "HUGGINGFACENAME":    HUGGINGFACENAME,
     "STORAGE_PATH":       REMOTE_STORAGE_PATH,
     "PERPLEXITY_API_KEY": PERPLEXITY_API_KEY,
-})
-
-# Separate from runtime_secret: the critic judge service is its own
-# deployment lifecycle (deployed once, independent of training runs), not
-# a training-container concern.
-critic_judge_secret = modal.Secret.from_dict({
-    "CRITIC_JUDGE_API_KEY": CRITIC_JUDGE_API_KEY,
 })
 
 app = modal.App(APP_NAME)
@@ -261,7 +256,6 @@ def train_solver(config: str, overrides: list[str] = [], run_ts: str = "",
     gpu=CRITIC_JUDGE_GPU,
     min_containers=0,               # scale to zero between runs — no GPU billed while idle
     scaledown_window=CRITIC_JUDGE_SCALEDOWN_WINDOW_S,
-    secrets=[critic_judge_secret],
     timeout=86400,
 )
 @modal.web_server(port=8000, startup_timeout=600)
@@ -282,20 +276,21 @@ def critic_judge_server():
     to zero. `orchestrator.py::wait_for_sft_critic_judge` warms this up once
     per co-evolution run, before Phase A, so the cold start (if any) doesn't
     stall the first judge call mid-training.
+
+    No auth on this endpoint: only we deploy it, and it's only ever up for
+    the span of a training run (min_containers=0/scaledown_window above), not
+    a long-lived public service. If that changes, add vLLM's --api-key.
     """
     import subprocess
 
-    cmd = [
+    subprocess.Popen([
         "python", "-m", "vllm.entrypoints.openai.api_server",
         "--model", CRITIC_MODEL_ID,
         "--served-model-name", CRITIC_SERVED_NAME,
         "--port", "8000",
         "--dtype", "auto",
         "--disable-log-requests",
-    ]
-    if os.environ.get("CRITIC_JUDGE_API_KEY"):
-        cmd += ["--api-key", os.environ["CRITIC_JUDGE_API_KEY"]]
-    subprocess.Popen(cmd)
+    ])
 
 
 @app.function(

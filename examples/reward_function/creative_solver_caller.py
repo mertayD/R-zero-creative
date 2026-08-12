@@ -208,7 +208,7 @@ def _get_agent():
     if _agent is None:
         from batch_eval_agent import BatchEvalAgent, PerCriterionEvalAgent
         from batch_eval_prompt import batch_evaluate_system
-        judge_type = os.environ.get("WB_JUDGE_TYPE", "claude")
+        judge_type = os.environ.get("WB_JUDGE_TYPE")
         if judge_type == "mock":
             from evaluator import MockJudgeAgent
             judge = MockJudgeAgent(system_prompt=batch_evaluate_system)
@@ -222,10 +222,24 @@ def _get_agent():
             from per_criterion_eval_prompt import evaluate_system as per_criterion_evaluate_system
             judge = CriticServerAgent(system_prompt=per_criterion_evaluate_system)
             _agent = PerCriterionEvalAgent(judge)
-        else:
+        elif judge_type == "claude":
             from evaluator import ClaudeAgent
             judge = ClaudeAgent(system_prompt=batch_evaluate_system)
             _agent = BatchEvalAgent(judge)
+        else:
+            # No silent default to claude: an unset/typo'd/unrecognized
+            # WB_JUDGE_TYPE must fail loud here, not quietly burn Claude API
+            # calls under the wrong judge. creative_rzero/config.py already
+            # validates judge.type at config-load time (VALID_JUDGE_TYPES) —
+            # this is defense-in-depth for direct/manual invocation, not the
+            # primary guard.
+            raise ValueError(
+                f"WB_JUDGE_TYPE={judge_type!r} is not a recognized judge type "
+                "(expected one of: claude, mock, sft-critic). It should be set "
+                "by verl_entry.py::_bridge_config_to_env from judge.type in the "
+                "experiment config — check EXPERIMENT_CONFIG_PATH if this fired "
+                "unexpectedly."
+            )
     return _agent
 
 

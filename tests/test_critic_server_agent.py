@@ -33,7 +33,6 @@ def wb_on_path(monkeypatch):
 @pytest.fixture(autouse=True)
 def critic_env(monkeypatch):
     monkeypatch.setenv("WB_CRITIC_URL", "https://fake-critic.modal.run")
-    monkeypatch.delenv("CRITIC_JUDGE_API_KEY", raising=False)
     monkeypatch.setenv("JUDGE_MAX_HTTP_RETRY_ATTEMPTS", "3")
     # _MAX_HTTP_RETRY_ATTEMPTS is read once at module import time (mirrors
     # evaluator/llm.py's own constant) — if some earlier test already
@@ -67,12 +66,15 @@ def test_requires_critic_url(monkeypatch):
 
 
 def test_success_path_returns_response_and_true(monkeypatch):
+    """No auth on this endpoint (REFACTOR_PLAN.md §6.2) — only we deploy it
+    and it's only up for the span of a training run — so requests.post is
+    called with no Authorization header at all."""
     from evaluator.critic_server import CriticServerAgent
 
     calls = []
 
-    def fake_post(url, json, headers, timeout):
-        calls.append((url, json, headers))
+    def fake_post(url, json, timeout):
+        calls.append((url, json))
         return _FakeResponse(200, _chat_completion_body('{"score": 7, "reason": "ok"}'))
 
     monkeypatch.setattr("evaluator.critic_server.requests.post", fake_post)
@@ -83,29 +85,12 @@ def test_success_path_returns_response_and_true(monkeypatch):
     assert success is True
     assert response == '{"score": 7, "reason": "ok"}'
     assert len(calls) == 1
-    url, payload, headers = calls[0]
+    url, payload = calls[0]
     assert url == "https://fake-critic.modal.run/v1/chat/completions"
     assert payload["messages"] == [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "score this"},
     ]
-    assert headers == {}  # no CRITIC_JUDGE_API_KEY set
-
-
-def test_bearer_token_sent_when_api_key_configured(monkeypatch):
-    monkeypatch.setenv("CRITIC_JUDGE_API_KEY", "secret-token")
-    from evaluator.critic_server import CriticServerAgent
-
-    seen_headers = {}
-
-    def fake_post(url, json, headers, timeout):
-        seen_headers.update(headers)
-        return _FakeResponse(200, _chat_completion_body("x"))
-
-    monkeypatch.setattr("evaluator.critic_server.requests.post", fake_post)
-
-    CriticServerAgent(system_prompt="sys").run(prompt="p")
-    assert seen_headers == {"Authorization": "Bearer secret-token"}
 
 
 def test_429_triggers_backoff_not_immediate_failure(monkeypatch):
@@ -117,7 +102,7 @@ def test_429_triggers_backoff_not_immediate_failure(monkeypatch):
         _FakeResponse(200, _chat_completion_body("ok after retry")),
     ]
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, timeout):
         return responses.pop(0)
 
     monkeypatch.setattr("evaluator.critic_server.requests.post", fake_post)
@@ -134,7 +119,7 @@ def test_retry_exhaustion_raises_judge_api_error_with_last_status(monkeypatch):
 
     monkeypatch.setattr("evaluator.critic_server.time.sleep", lambda _: None)
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, timeout):
         return _FakeResponse(503, text="model loading")
 
     monkeypatch.setattr("evaluator.critic_server.requests.post", fake_post)
@@ -153,7 +138,7 @@ def test_network_error_retries_then_raises(monkeypatch):
 
     monkeypatch.setattr("evaluator.critic_server.time.sleep", lambda _: None)
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, timeout):
         raise requests.exceptions.ConnectionError("boom")
 
     monkeypatch.setattr("evaluator.critic_server.requests.post", fake_post)
@@ -171,7 +156,7 @@ def test_success_check_fn_retried_before_success(monkeypatch):
 
     bodies = ["not json", '{"score": 5, "reason": "ok"}']
 
-    def fake_post(url, json, headers, timeout):
+    def fake_post(url, json, timeout):
         return _FakeResponse(200, _chat_completion_body(bodies.pop(0)))
 
     monkeypatch.setattr("evaluator.critic_server.requests.post", fake_post)

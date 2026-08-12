@@ -13,15 +13,16 @@ Matches ClaudeAgent's public surface (`run`) and failure semantics exactly
 every failure_reason/backoff mechanism already built for the Claude judge
 (REFACTOR_PLAN T1.4/T1.5) covers this backend for free.
 
+No auth: the deployed server is only ever spun up/torn down around a
+training run by us (min_containers=0 — REFACTOR_PLAN.md §6.2), not a
+long-lived public service, so there's no bearer token here unlike
+ClaudeAgent's required PERPLEXITY_API_KEY (a third-party API that mandates
+one). If that deployment model ever changes, add auth then.
+
 Configuration:
     WB_CRITIC_URL      required, base URL of the deployed vLLM sft-critic server
     WB_CRITIC_MODEL     optional, default 'writingbench-critic-qwen-7b' —
                          must match the server's --served-model-name
-    CRITIC_JUDGE_API_KEY  optional bearer token — set only if the deployed
-                         server was launched with vLLM's --api-key (see
-                         modal_app.py::critic_judge_server). Unlike
-                         PERPLEXITY_API_KEY, not required: a self-hosted
-                         deployment may run without auth (e.g. local dev).
     JUDGE_MAX_HTTP_RETRY_ATTEMPTS  optional, default 5 (shared with ClaudeAgent)
 """
 
@@ -50,7 +51,6 @@ class CriticServerAgent(object):
         self.system_prompt = system_prompt
         self.url = os.environ.get("WB_CRITIC_URL", "")
         self.model = DEFAULT_CRITIC_MODEL
-        self.api_key = os.environ.get("CRITIC_JUDGE_API_KEY", "")
         if not self.url:
             raise RuntimeError(
                 "WB_CRITIC_URL is not set. judge.type=sft-critic requires "
@@ -70,7 +70,6 @@ class CriticServerAgent(object):
             "temperature": temperature,
             "max_tokens": int(max_length),
         }
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
         attempt = 0
         wait_time = 1
@@ -78,7 +77,7 @@ class CriticServerAgent(object):
 
         while attempt < _MAX_HTTP_RETRY_ATTEMPTS:
             try:
-                response = requests.post(endpoint, json=data, headers=headers, timeout=120)
+                response = requests.post(endpoint, json=data, timeout=120)
                 if response.status_code == 200:
                     body = response.json()
                     # OpenAI chat-completions schema:
