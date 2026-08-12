@@ -63,7 +63,7 @@ HUGGINGFACENAME     = os.getenv("HUGGINGFACENAME", "")
 CRITIC_MODEL_ID              = "AQuarterMile/WritingBench-Critic-Model-Qwen-7B"
 CRITIC_SERVED_NAME           = os.getenv("CRITIC_SERVED_NAME", "writingbench-critic-qwen-7b")
 CRITIC_JUDGE_GPU             = os.getenv("CRITIC_JUDGE_GPU", "L4")
-CRITIC_JUDGE_SCALEDOWN_WINDOW_S = int(os.getenv("CRITIC_JUDGE_SCALEDOWN_WINDOW_S", "900"))
+CRITIC_JUDGE_SCALEDOWN_WINDOW_S = int(os.getenv("CRITIC_JUDGE_SCALEDOWN_WINDOW_S", "3600"))
 
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
@@ -254,6 +254,7 @@ def train_solver(config: str, overrides: list[str] = [], run_ts: str = "",
                   # build target — heavier than strictly necessary for a
                   # single served model, deliberately kept simple for now.
     gpu=CRITIC_JUDGE_GPU,
+    secrets=[runtime_secret],       # HF_TOKEN, in case CRITIC_MODEL_ID ever becomes gated/private
     min_containers=0,               # scale to zero between runs — no GPU billed while idle
     scaledown_window=CRITIC_JUDGE_SCALEDOWN_WINDOW_S,
     timeout=86400,
