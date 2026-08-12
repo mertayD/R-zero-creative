@@ -14,12 +14,14 @@ from creative_rzero.orchestrator import (
     CheckpointVerificationError,
     CoevolveState,
     PromptShortfallError,
+    SftCriticJudgeError,
     aux_gpu_id,
     generate_solver_prompts,
     n_training_gpus,
     run_coevolve,
     training_gpu_ids,
     verify_checkpoint,
+    wait_for_sft_critic_judge,
 )
 from creative_rzero.paths import RunPaths
 
@@ -289,3 +291,84 @@ def test_num_iters_validated():
 
     with pytest.raises(ConfigError, match="num_iters"):
         load(TINY_EXP, cli_args=["run.num_iters=0"])
+
+
+# ---------------------------------------------------------------------------
+# sft-critic judge warm-up (T3.11) — REFACTOR_PLAN.md §6.2
+# ---------------------------------------------------------------------------
+
+class _FakeHealthResponse:
+    def __init__(self, ok):
+        self.ok = ok
+
+
+def test_wait_for_sft_critic_judge_succeeds_immediately_when_healthy(monkeypatch):
+    calls = []
+
+    def fake_get(url, timeout):
+        calls.append(url)
+        return _FakeHealthResponse(ok=True)
+
+    monkeypatch.setattr("requests.get", fake_get)
+
+    wait_for_sft_critic_judge("https://fake-critic.modal.run/", health_timeout_s=5, poll_interval_s=0)
+    assert calls == ["https://fake-critic.modal.run/health"]
+
+
+def test_wait_for_sft_critic_judge_polls_through_cold_start(monkeypatch):
+    import requests
+
+    responses = [requests.RequestException("cold"), _FakeHealthResponse(ok=False), _FakeHealthResponse(ok=True)]
+
+    def fake_get(url, timeout):
+        r = responses.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    monkeypatch.setattr("requests.get", fake_get)
+    monkeypatch.setattr("creative_rzero.orchestrator.time.sleep", lambda _: None)
+
+    wait_for_sft_critic_judge("https://fake-critic.modal.run", health_timeout_s=5, poll_interval_s=0)
+    assert responses == []
+
+
+def test_wait_for_sft_critic_judge_times_out(monkeypatch):
+    monkeypatch.setattr("requests.get", lambda url, timeout: _FakeHealthResponse(ok=False))
+    monkeypatch.setattr("creative_rzero.orchestrator.time.sleep", lambda _: None)
+
+    with pytest.raises(SftCriticJudgeError, match="not ready after"):
+        wait_for_sft_critic_judge("https://fake-critic.modal.run", health_timeout_s=0, poll_interval_s=0)
+
+
+def test_run_coevolve_warms_up_sft_critic_judge_once(cfg, tmp_path, monkeypatch):
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    cfg.judge.type = "sft-critic"
+    cfg.judge.critic_url = "https://fake-critic.modal.run"
+    cfg.run.num_iters = 2
+    log = []
+    challenger_fn, solver_fn = _mk_phase_fns(tmp_path, log)
+
+    warmups = []
+    monkeypatch.setattr(orchestrator, "wait_for_sft_critic_judge", lambda url: warmups.append(url))
+
+    run_coevolve(cfg, tmp_path, train_challenger_fn=challenger_fn, train_solver_fn=solver_fn)
+
+    # once per run_coevolve call, not once per phase/iteration.
+    assert warmups == ["https://fake-critic.modal.run"]
+
+
+def test_run_coevolve_skips_warmup_for_non_sft_critic_judge(cfg, tmp_path, monkeypatch):
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    assert cfg.judge.type != "sft-critic"
+    log = []
+    challenger_fn, solver_fn = _mk_phase_fns(tmp_path, log)
+
+    def fail_if_called(url):
+        pytest.fail("wait_for_sft_critic_judge must not be called for judge.type != sft-critic")
+
+    monkeypatch.setattr(orchestrator, "wait_for_sft_critic_judge", fail_if_called)
+
+    run_coevolve(cfg, tmp_path, train_challenger_fn=challenger_fn, train_solver_fn=solver_fn)

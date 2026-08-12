@@ -24,6 +24,7 @@ import json
 from batch_eval_prompt import batch_evaluate_prompt
 from evaluate_benchmark import process_gen_field
 from evaluator.llm import JudgeAPIError
+from per_criterion_eval_prompt import evaluate_prompt as _per_criterion_evaluate_prompt
 
 
 class JudgeParseError(Exception):
@@ -154,3 +155,109 @@ class BatchEvalAgent:
         # deterministic _strip_fences) — no try/except here so a future
         # divergence between the two would surface loudly, not get swallowed.
         return json.loads(_strip_fences(response))
+
+
+class PerCriterionEvalAgent:
+    """Per-criterion counterpart to BatchEvalAgent — one judge call per
+    criterion instead of one call scoring all criteria at once, using the
+    exact upstream single-criterion prompt (per_criterion_eval_prompt.py,
+    vendored verbatim from X-PLUG/WritingBench's prompt.py, not
+    batch_eval_prompt.py's multi-criterion generalization).
+
+    Selected by default for judge.type=sft-critic (REFACTOR_PLAN.md
+    §6.3/§6.4): the sft-critic model was trained/validated by WritingBench
+    against this exact single-criterion format, not the batched one
+    BatchEvalAgent uses to cut Claude's call count. Wraps *any* agent
+    implementing the shared `.run(prompt, ...)` surface (ClaudeAgent,
+    MockJudgeAgent, or CriticServerAgent) exactly like BatchEvalAgent does
+    — nothing here references vLLM, HTTP, or CriticServerAgent by name, so
+    other judge backends can opt into per-criterion scoring later with zero
+    changes to this class.
+    """
+
+    def __init__(self, agent):
+        self.agent = agent
+
+    def success_check_fn(self, response: str) -> bool:
+        """Predicate only — must never raise, mirroring
+        BatchEvalAgent.success_check_fn's contract: a malformed-but-parseable
+        response is treated as "didn't validate, retry" rather than crashing
+        run()'s retry loop."""
+        try:
+            result = json.loads(_strip_fences(response))
+            return (
+                isinstance(result.get("score"), int)
+                and result["score"] in set(range(1, 11))
+                and isinstance(result.get("reason"), str)
+            )
+        except (json.JSONDecodeError, TypeError, AttributeError, KeyError):
+            return False
+
+    def _score_one(self, response_text: str, query: str, criterion: dict, max_retries: int) -> dict:
+        """Score a single criterion. `criterion` is passed to the prompt
+        template as the raw dict — str.format stringifies it via repr,
+        embedding e.g. {{'name': 'Foo', 'criteria_description': 'Bar', ...}}
+        — exactly how upstream WritingBench's EvalAgent.generate_score does
+        it. Deliberately not BatchEvalAgent._format_criterion's hand-formatted
+        "Name: X\\nDescription: Y" block: that presentation was written for
+        batch_evaluate_prompt and the sft-critic model was never validated
+        against it."""
+        prompt = _per_criterion_evaluate_prompt.format(
+            criteria=criterion,
+            query=query,
+            response=response_text,
+        )
+        # A JudgeAPIError means the agent's own HTTP retry budget is already
+        # exhausted — propagates immediately, uncaught here, same contract
+        # as BatchEvalAgent.score_all_criteria.
+        response, success = self.agent.run(
+            prompt=prompt,
+            max_try=max_retries,
+            success_check_fn=self.success_check_fn,
+        )
+        if not success:
+            raise JudgeParseError(
+                f"Failed to score criterion {criterion.get('name')!r} after {max_retries} attempts. "
+                f"Last response: {response!r}"
+            )
+        return json.loads(_strip_fences(response))
+
+    def score_all_criteria(
+        self,
+        content: dict,
+        query: str,
+        criteria: list,
+        max_retries: int = 3,
+    ) -> dict:
+        """Score every criterion for one response, one judge call per
+        criterion (N calls instead of BatchEvalAgent's 1). Returns the
+        **exact same** `Dict[name, {"score": int, "reason": str}]` shape
+        `BatchEvalAgent.score_all_criteria` returns, so callers (the
+        creative reward strategies) need no awareness of which scorer
+        produced it.
+
+        Raises:
+            JudgeInputError if a criterion dict is missing a required field
+                           — fails before any judge call is made, same as
+                           BatchEvalAgent.
+            JudgeAPIError  propagates immediately from whichever criterion's
+                           call fails first — there is no partial-credit
+                           result with some criteria missing: callers already
+                           treat one score_all_criteria call as one atomic
+                           outcome for one sample.
+            JudgeParseError if any single criterion's judge responds every
+                           attempt but its output never validates after
+                           max_retries.
+        """
+        for c in criteria:
+            try:
+                c["name"]
+                c["criteria_description"]
+            except KeyError as e:
+                raise JudgeInputError(f"criterion missing required field {e}: {c!r}") from e
+
+        response_text = process_gen_field(content["response"])
+        return {
+            c["name"]: self._score_one(response_text, query, c, max_retries)
+            for c in criteria
+        }

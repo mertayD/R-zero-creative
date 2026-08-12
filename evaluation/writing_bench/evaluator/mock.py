@@ -8,6 +8,13 @@ creative_writing_caller.py) run unmodified — only the judge's network call is
 replaced, not the scoring/ranking pipeline built on top of it. No
 PERPLEXITY_API_KEY required.
 
+Also a valid stand-in for PerCriterionEvalAgent's per-criterion prompt
+(per_criterion_eval_prompt.py, judge.type=sft-critic's default scoring
+strategy — REFACTOR_PLAN.md §6.3): that prompt has no "Name: X" lines (the
+criterion dict is embedded raw, not via BatchEvalAgent._format_criterion), so
+when none are found this returns a single {"score", "reason"} object instead
+of the batched {name: {...}, ...} shape.
+
 Scores are pseudo-random per criterion (1-10, matching the real judge's
 scale) but drawn from a seeded RNG so a run is reproducible: same config, same
 scores, useful when debugging a pipeline issue without that noise also
@@ -49,12 +56,24 @@ class MockJudgeAgent:
         # extracted criteria names.
         criteria_section = prompt.split("** Query **", 1)[0]
         names = _NAME_RE.findall(criteria_section)
-        response = json.dumps({
-            name: {
+        if names:
+            body = {
+                name: {
+                    "score": self._rng.randint(1, 10),
+                    "reason": "mock judge (judge.type=mock) — no live API call",
+                }
+                for name in names
+            }
+        else:
+            # No "Name: X" lines to extract — this is the per-criterion
+            # prompt (per_criterion_eval_prompt.py), which embeds one raw
+            # criterion dict per call rather than a "** Criteria **" block
+            # naming several. Respond with the single {"score", "reason"}
+            # shape that prompt's own "Output format" section asks for.
+            body = {
                 "score": self._rng.randint(1, 10),
                 "reason": "mock judge (judge.type=mock) — no live API call",
             }
-            for name in names
-        })
+        response = json.dumps(body)
         success = success_check_fn(response) if success_check_fn else True
         return response, success

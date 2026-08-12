@@ -81,11 +81,14 @@ def _bridge_config_to_env(cfg) -> None:
     setdefault: the resolved config is the source of truth, ambient env is
     not."""
     bridge = {
-        # judge client (evaluation/writing_bench/evaluator/llm.py / mock.py)
+        # judge client (evaluation/writing_bench/evaluator/llm.py / mock.py / critic_server.py)
         "WB_JUDGE_TYPE": cfg.judge.type,
         "WB_JUDGE_MODEL": cfg.judge.model,
         "WB_JUDGE_MAX_TOKENS": cfg.judge.max_tokens,
         "JUDGE_MAX_HTTP_RETRY_ATTEMPTS": cfg.judge.http_max_retry_attempts,
+        # sft-critic backend only (evaluator/critic_server.py::CriticServerAgent)
+        "WB_CRITIC_URL": cfg.judge.critic_url or "",
+        "WB_CRITIC_MODEL": cfg.judge.critic_model,
         # both callers
         "CREATIVE_SCORER_MAX_WORKERS": cfg.judge.max_workers,
         "TRUNCATION_MARGIN_TOKENS": cfg.judge.truncation_margin_tokens,

@@ -50,6 +50,29 @@ def test_unknown_judge_type_raises():
         load(EXAMPLE_EXP, cli_args=["judge.type=nonsense"])
 
 
+def test_sft_critic_without_url_raises_at_load_time():
+    """judge.type=sft-critic with no critic_url must fail at config.load()
+    (startup) — before any GPU/run infra is touched, not as the first judge
+    call's crash an hour into a run."""
+    with pytest.raises(ConfigError, match="judge.critic_url"):
+        load(EXAMPLE_EXP, cli_args=["judge.type=sft-critic"])
+
+
+def test_sft_critic_with_non_http_url_raises():
+    with pytest.raises(ConfigError, match="judge.critic_url"):
+        load(EXAMPLE_EXP, cli_args=["judge.type=sft-critic", "judge.critic_url=not-a-url"])
+
+
+def test_sft_critic_with_url_loads_successfully():
+    config = load(
+        EXAMPLE_EXP,
+        cli_args=["judge.type=sft-critic", "judge.critic_url=https://example--critic-judge-server.modal.run"],
+    )
+    assert config.judge.type == "sft-critic"
+    assert config.judge.critic_url == "https://example--critic-judge-server.modal.run"
+    assert config.judge.critic_model == "writingbench-critic-qwen-7b"
+
+
 def test_save_resolved_writes_reloadable_yaml(tmp_path):
     config = load(EXAMPLE_EXP)
 

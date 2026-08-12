@@ -218,15 +218,26 @@ def _log_challenger_rollouts(
 def _get_agent():
     global _agent
     if _agent is None:
-        from batch_eval_agent import BatchEvalAgent
+        from batch_eval_agent import BatchEvalAgent, PerCriterionEvalAgent
         from batch_eval_prompt import batch_evaluate_system
-        if os.environ.get("WB_JUDGE_TYPE", "claude") == "mock":
+        judge_type = os.environ.get("WB_JUDGE_TYPE", "claude")
+        if judge_type == "mock":
             from evaluator import MockJudgeAgent
             judge = MockJudgeAgent(system_prompt=batch_evaluate_system)
+            _agent = BatchEvalAgent(judge)
+        elif judge_type == "sft-critic":
+            # sft-critic scores per-criterion, not batched — see
+            # PerCriterionEvalAgent's docstring and REFACTOR_PLAN.md §6.3/§6.4
+            # for why this backend does not reuse batch_evaluate_system/
+            # BatchEvalAgent the way claude/mock do.
+            from evaluator import CriticServerAgent
+            from per_criterion_eval_prompt import evaluate_system as per_criterion_evaluate_system
+            judge = CriticServerAgent(system_prompt=per_criterion_evaluate_system)
+            _agent = PerCriterionEvalAgent(judge)
         else:
             from evaluator import ClaudeAgent
             judge = ClaudeAgent(system_prompt=batch_evaluate_system)
-        _agent = BatchEvalAgent(judge)
+            _agent = BatchEvalAgent(judge)
     return _agent
 
 

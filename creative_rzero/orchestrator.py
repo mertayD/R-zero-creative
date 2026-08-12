@@ -71,6 +71,10 @@ class SolverServerError(RuntimeError):
     """Raised when the vLLM solver oracle fails to become healthy."""
 
 
+class SftCriticJudgeError(RuntimeError):
+    """Raised when the deployed sft-critic judge service never becomes healthy."""
+
+
 # ---------------------------------------------------------------------------
 # GPU layout
 # ---------------------------------------------------------------------------
@@ -208,6 +212,45 @@ def solver_server(
             proc.kill()
             proc.wait()
         print("[solver_server] vLLM solver stopped.")
+
+
+# ---------------------------------------------------------------------------
+# sft-critic judge warm-up (Phase A + Phase B reward dependency, T3.11)
+# ---------------------------------------------------------------------------
+
+SFT_CRITIC_HEALTH_TIMEOUT_S = 300
+SFT_CRITIC_POLL_INTERVAL_S = 10
+
+
+def wait_for_sft_critic_judge(
+    url: str,
+    *,
+    health_timeout_s: int = SFT_CRITIC_HEALTH_TIMEOUT_S,
+    poll_interval_s: int = SFT_CRITIC_POLL_INTERVAL_S,
+) -> None:
+    """Warm up the persistent, scale-to-zero sft-critic judge service
+    (modal_app.py::critic_judge_server, REFACTOR_PLAN.md §6.2) before
+    training starts, so a cold vLLM boot (roughly 1-3 min for a 7B model)
+    lands here rather than stalling the first judge call mid-training.
+
+    Unlike solver_server(), this doesn't spawn or own a process — the
+    service is already deployed and scales itself (min_containers=0); this
+    only polls its /health endpoint until a container is up."""
+    import requests
+
+    print(f"[sft_critic_judge] warming up {url} ...")
+    deadline = time.monotonic() + health_timeout_s
+    while True:
+        try:
+            if requests.get(f"{url.rstrip('/')}/health", timeout=5).ok:
+                break
+        except requests.RequestException:
+            pass
+        if time.monotonic() > deadline:
+            raise SftCriticJudgeError(f"sft-critic judge at {url} not ready after {health_timeout_s}s")
+        print("[sft_critic_judge] ... waiting for sft-critic judge")
+        time.sleep(poll_interval_s)
+    print("[sft_critic_judge] sft-critic judge ready.")
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +445,12 @@ def run_coevolve(
         f"challenger={state.current_challenger} solver={state.current_solver} "
         f"seed={cfg.run.seed} profile={cfg.run.profile} ==="
     )
+
+    if cfg.judge.type == "sft-critic":
+        # One warm-up for the whole run, not per phase/iteration — the
+        # deployed service's scaledown_window is sized to comfortably span
+        # the gap between phases (REFACTOR_PLAN.md §6.2).
+        wait_for_sft_critic_judge(cfg.judge.critic_url)
 
     for iter_num in range(1, cfg.run.num_iters + 1):
         if iter_num < state.next_iter:
