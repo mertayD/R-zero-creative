@@ -28,8 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BASE_CONFIG_PATH = REPO_ROOT / "configs" / "base.yaml"
 
 VALID_PROFILES = ("dryrun", "smoke", "small", "full")
-# TODO(dayanc): To add small SFTed judge support.
-VALID_JUDGE_TYPES = ("claude", "mock")
+VALID_JUDGE_TYPES = ("claude", "mock", "sft-critic")
 # Stand-in for the Phase-3 reward registry (T3.3), which doesn't exist yet.
 # Only the strategies that actually exist today are accepted. Once
 # rewards/registry.py lands, swap these for `registry.SOLVER_REWARDS.keys()`
@@ -85,13 +84,15 @@ class SolverConfig:
 
 @dataclass
 class JudgeConfig:
-    type: str = "claude"  # claude | mock
+    type: str = "claude"  # claude | mock | sft-critic
     model: str = "claude-sonnet-5"
     max_tokens: int = 8192
     http_max_retry_attempts: int = 5
     max_workers: int = 4
     truncation_margin_tokens: int = 16
     low_quality_threshold: float = 2.0
+    critic_url: Optional[str] = None  # base URL of the deployed vLLM sft-critic server — required when type=sft-critic
+    critic_model: str = "writingbench-critic-qwen-7b"  # --served-model-name the sft-critic server was launched with
 
 
 @dataclass
@@ -138,6 +139,11 @@ def _validate(config: ExperimentConfig) -> None:
         errors.append(f"judge.type={config.judge.type!r} must be one of {VALID_JUDGE_TYPES}")
     elif config.judge.type == "claude" and not (config.judge.model or "").startswith("claude-"):
         errors.append(f"judge.model={config.judge.model!r} doesn't look like a Claude model id (expected a 'claude-' prefix)")
+    elif config.judge.type == "sft-critic" and not (config.judge.critic_url or "").startswith("http"):
+        errors.append(
+            f"judge.critic_url={config.judge.critic_url!r} is required and must be an http(s) URL when judge.type=sft-critic "
+            "(the deployed vLLM sft-critic server's URL — see modal_app.py::critic_judge_server)"
+        )
 
     if config.rewards.solver.type not in VALID_SOLVER_REWARDS:
         errors.append(f"rewards.solver.type={config.rewards.solver.type!r} must be one of {VALID_SOLVER_REWARDS}")

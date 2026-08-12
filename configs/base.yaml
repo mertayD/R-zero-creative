@@ -62,13 +62,15 @@ solver:
 # shared by both the challenger and solver reward pipelines.
 # ---------------------------------------------------------------------------
 judge:
-  type: claude                    # claude | mock — mock returns deterministic scores for offline testing without API calls
-  model: claude-sonnet-5           # judge model id
+  type: claude                    # claude | mock | sft-critic — mock returns deterministic scores for offline testing; sft-critic self-hosts AQuarterMile/WritingBench-Critic-Model-Qwen-7B over HTTP (see docs/REFACTOR_PLAN.md §6)
+  model: claude-sonnet-5           # judge model id (claude backend only)
   max_tokens: 8192                  # max tokens per judge response
   http_max_retry_attempts: 5        # network-level retries before a judge call is treated as failed
   max_workers: 4                     # max concurrent judge calls, capped to stay under the API's requests-per-minute limit
   truncation_margin_tokens: 16       # how close a response's length must be to its role's max_response_length before it's flagged as possibly truncated
   low_quality_threshold: 2.0          # raw judge score (1-10 scale) at or below which a group of samples is too uniformly bad to rank meaningfully — the group gets a neutral reward instead
+  critic_url: null                    # base URL of the deployed vLLM sft-critic server (modal_app.py::critic_judge_server) — required when judge.type=sft-critic, checked at config-load/startup time
+  critic_model: writingbench-critic-qwen-7b  # --served-model-name the sft-critic server was launched with
 
 # ---------------------------------------------------------------------------
 # Reward strategy selection — which reward formula each role uses. New

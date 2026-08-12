@@ -358,4 +358,140 @@ Then:  T4.3 manifest, T4.5 profiles, T4.2 README
 End of Week 1: T2.9 validation run (first GPU spend)
 ```
 
+---
+
+## 6. Revision 2026-08-11 — self-hosted vLLM SFT-critic judge (`judge.type: sft-critic`)
+
+Adds a third judge backend: [AQuarterMile/WritingBench-Critic-Model-Qwen-7B](https://huggingface.co/AQuarterMile/WritingBench-Critic-Model-Qwen-7B), the fine-tuned Qwen-7B critic WritingBench itself publishes as a self-hostable alternative to its Claude judge. Resolves the `# TODO(dayanc): To add small SFTed judge support.` sitting directly above `VALID_JUDGE_TYPES` in `creative_rzero/config.py` — named `judge.type: sft-critic` (not `critic`) to describe what it actually is, a small SFT'd judge model, rather than the vendor class name (`CriticAgent`) it happens to reuse. Motivation: a free, unrate-limited, low-latency judge for high-volume dry runs and reward-ablation sweeps where Claude's per-call cost and 4-worker concurrency cap (`judge.max_workers`) are the bottleneck — **not** a claim that sft-critic scores match Claude's quality bar. T2.9's Accept criteria and any paper headline numbers keep using `judge.type: claude`; `sft-critic` is an iteration-speed tool, `mock` is a wiring tool, `claude` is the quality bar.
+
+### 6.1 What already exists vs. what's new
+
+`evaluation/writing_bench/evaluator/critic.py::CriticAgent` is already vendored (Apache-2.0, from WritingBench upstream) but is a **standalone-script judge**: it loads vLLM in-process (`self.model = LLM(model=...)`) and is only ever wired through `evaluate_benchmark.py --evaluator critic` / `solver_sampling.py --evaluator critic`, both one-shot CLI scripts that own their whole process and exit when done. That shape doesn't fit the training loop: `verl_entry.py`'s reward function runs inside the verl worker process, which is already GPU-resident running the policy being trained — it can't also load a second 7B model in-process without fighting the trainer for VRAM. The training-loop judge needs to be reached over HTTP, exactly like `ClaudeAgent` already is.
+
+**Nothing under `evaluation/writing_bench/evaluator/` gets deleted, renamed, or modified.** `critic.py`/`CriticAgent` keeps serving the standalone benchmark scripts unchanged (including its own `--evaluator critic` flag, which stays as-is); this section adds a sibling HTTP-client class for the training path.
+
+### 6.2 Hosting: a Modal vLLM service that scales to zero between runs
+
+```python
+CRITIC_MODEL_ID = "AQuarterMile/WritingBench-Critic-Model-Qwen-7B"
+CRITIC_SERVED_NAME = "writingbench-critic-qwen-7b"
+
+critic_image = modal.Image.debian_slim().pip_install("vllm==0.9.1")
+
+@app.function(
+    image=critic_image,
+    gpu="L4",                     # single 24GB-class GPU: 7B model, tensor_parallel_size=1
+    min_containers=0,              # scale to zero between runs — no GPU billed while idle
+    scaledown_window=900,           # stay warm 15 min past the last judge call, so idle gaps between training steps (not just between runs) don't each re-trigger a cold start
+    timeout=3600 * 24,
+)
+@modal.web_server(port=8000, startup_timeout=600)
+def critic_judge_server():
+    subprocess.Popen([
+        "python", "-m", "vllm.entrypoints.openai.api_server",
+        "--model", CRITIC_MODEL_ID,
+        "--served-model-name", CRITIC_SERVED_NAME,
+        "--port", "8000",
+        "--dtype", "auto",
+        "--disable-log-requests",
+    ])
+```
+
+`modal deploy modal_app.py` once. The resulting URL (`https://<workspace>--critic-judge-server.modal.run`) is **stable for the life of the deployment regardless of whether a container is currently running behind it** — only renaming the app or function changes it, so `judge.critic_url` is set once and never touched again. With `min_containers=0` (the default), Modal's own autoscaling gives exactly the start-before-training / stop-after behavior wanted, with no orchestration code needed: no container and no GPU cost while idle; the first request of a run triggers a cold start; `scaledown_window` after the last request with no further traffic, it scales back to 0 on its own.
+
+The one addition worth making on top of that default: a **warm-up ping** at the very start of a run using `judge.type: sft-critic`, so the cold-start latency (vLLM engine boot, roughly 1-3 min for a 7B model) lands before training starts rather than stalling the first real batch of rollouts mid-training. Same shape `orchestrator.py::solver_server()` already uses to poll `/health` before yielding — add an equivalent `wait_for_sft_critic_judge(url, health_timeout_s=...)` poll in `orchestrator.py`, called once per `run_coevolve` call (not once per phase — a 900s `scaledown_window` should comfortably span the gap between Phase A and Phase B) before `run_challenger_phase` starts.
+
+No auth on this endpoint: only we deploy it, and it's only ever up for the span of a training run (`min_containers=0`/`scaledown_window` above), not a long-lived public service that would need a bearer token the way `ClaudeAgent`'s third-party API mandates `PERPLEXITY_API_KEY`. Revisit if the deployment model ever changes (e.g. shared across untrusted callers). The run's own aux-GPU accounting in `orchestrator.py` (`n_training_gpus`, `aux_gpu_id`) is untouched — this judge never consumes a GPU on the training node, deployed or idle.
+
+### 6.3 Prompt format: per-criterion, not batched — and decoupled from which judge backend is picked
+
+`evaluate_benchmark.py` (upstream-vendored) only ever wires `CriticAgent` through `EvalAgent`, which scores **one criterion per call** using `prompt.py`'s `evaluate_prompt`. The training path's judge — in both `creative_solver_caller.py` and `creative_writing_caller.py`, at their identically-shaped `WB_JUDGE_TYPE` dispatch blocks (~L209-217 and ~L221-229 respectively) — only ever wires the judge through `BatchEvalAgent`, which scores **all criteria in one call** using `batch_eval_prompt.py`'s `batch_evaluate_prompt` (a multi-criterion generalization of the same template: one JSON object with N keys instead of one JSON object with 2 fields). `BatchEvalAgent` exists specifically to cut Claude's per-sample judge calls from N down to 1 (see its module docstring) — a latency/cost optimization that makes sense for a general-purpose instruction-follower hit over a paid, rate-limited API.
+
+The sft-critic model is a small fine-tune trained and validated by WritingBench specifically against the single-criterion format. Asking it to emit N nested JSON objects in one generation (the batched schema) is an untested generalization for a 7B model — parse-success rate and score calibration under that prompt are unknown, and a regression here would silently show up as `judge_parse_fail` noise or, worse, miscalibrated-but-parseable scores that don't mean what WritingBench's published numbers mean. Because the whole point of self-hosting is removing the cost/rate-limit pressure that motivated batching in the first place, there's no reason to take that risk: **the sft-critic path scores per-criterion**, at N judge calls per sample instead of 1 — cheap and fast against a local, unrate-limited server, exactly matching the format the critic model was validated against.
+
+This means `judge.type: sft-critic` needs a different *scoring strategy* than `BatchEvalAgent`, but that scoring strategy must not be hardwired to the sft-critic backend specifically — it's a general capability any judge could use. `PerCriterionEvalAgent`, like `BatchEvalAgent`, wraps **any** agent implementing the shared `.run(prompt, ...)` surface (`ClaudeAgent`, `MockJudgeAgent`, or the new `CriticServerAgent`): `PerCriterionEvalAgent(agent)`, never `PerCriterionEvalAgent(critic_url=...)`. It returns the **same** `Dict[name, {"score", "reason"}]` shape `BatchEvalAgent.score_all_criteria` returns — so the reward callers' downstream code (rank/uncertainty math, logging) needs zero branching on judge type, and nothing inside `PerCriterionEvalAgent` itself may import or reference vLLM, HTTP, or `CriticServerAgent` by name. It is implemented standalone (its own prompt formatting + parse/retry loop), not by importing `EvalAgent` from `evaluate_benchmark.py` — that file is a CLI script (`if __name__ == "__main__":` argparse entrypoint) that the training path has no business depending on; the two are related only in that both, independently, use the exact same upstream prompt template (below).
+
+Judge *backend* (claude / mock / sft-critic) and *scoring strategy* (batched / per-criterion) are two independent choices — exactly how `BatchEvalAgent(agent)` already treats the backend as opaque. `sft-critic` defaults to `PerCriterionEvalAgent` because that's the format it was validated against, but the same class works unmodified if `claude` or `mock` ever want a per-criterion mode too (e.g. auditing whether Claude's batched scores drift from its own per-criterion scores). Concretely, both dispatch blocks build the two pieces independently rather than fusing them into one branch per judge type:
+
+```python
+agent = {"claude": ClaudeAgent, "mock": MockJudgeAgent, "sft-critic": CriticServerAgent}[judge_type](...)
+scorer_cls = PerCriterionEvalAgent if judge_type == "sft-critic" else BatchEvalAgent
+_agent = scorer_cls(agent)
+```
+
+**Vendored prompt, a dedicated file.** Verified against the source the user pointed at ([`X-PLUG/WritingBench/blob/main/prompt.py`](https://github.com/X-PLUG/WritingBench/blob/main/prompt.py)) — its `evaluate_system`/`evaluate_prompt` are content-identical (diff shows only incidental trailing-whitespace on two lines) to the `evaluate_system`/`evaluate_prompt` already vendored in `evaluation/writing_bench/prompt.py`. Rather than importing that copy (which `evaluate_benchmark.py` owns and is free to change for standalone-benchmark reasons unrelated to training), `PerCriterionEvalAgent` gets its own frozen copy in a new file, **`evaluation/writing_bench/per_criterion_eval_prompt.py`** — same two variable names (`evaluate_system`, `evaluate_prompt`), same "vendored verbatim, do not edit" header `prompt.py` already carries, same source URL cited in the header comment. This mirrors the existing precedent: `batch_eval_prompt.py` is already its own file rather than an import from `prompt.py`, so each of the three consumers (standalone benchmark, batched training judge, per-criterion training judge) owns a prompt file it can be reasoned about independently of the others, even though two of the three currently hold identical content.
+
+**Request construction — parse the criterion dict, don't reformat it.** `criteria` arrives as `list[dict]`, each with `"name"`, `"criteria_description"`, and optional `"1-2"`/`"3-4"`/.../`"9-10"` rubric keys (`WritingPrompt.criteria`'s shape, `creative_rzero/data/writing_prompt.py`). `BatchEvalAgent._format_criterion` turns each dict into a hand-formatted "Name: X\nDescription: Y\n  1-2: ..." block — a presentation `batch_eval_prompt.py` was written to expect, but not what upstream's `evaluate_prompt` was validated against. Fidelity to the linked upstream file means **not** reusing `_format_criterion` here: for each criterion dict `c` (after an eager `"name"` / `"criteria_description"` presence check — `JudgeInputError` immediately if missing, before any judge call, matching `_format_criterion`'s existing eager-fail contract), build the prompt as `evaluate_prompt.format(criteria=c, query=query, response=process_gen_field(content["response"]))`, passing the **raw dict** as `criteria` exactly the way upstream's `EvalAgent.generate_score(content, query, c)` → `evaluate_prompt.format(**{"query": query, "response": ..., "criteria": criteria})` does — Python's `str.format` stringifies the dict via its default `repr`, embedding it as `{'name': 'Foo', 'criteria_description': 'Bar', '1-2': ..., ...}` in the rendered prompt. This is one judge call per criterion (N calls per sample, not 1), each scored independently.
+
+**Response reconstruction — exactly the shape reward code already expects.** Each per-criterion judge call returns one `{"score": int, "reason": str}` object (parsed via the same `_strip_fences` helper `BatchEvalAgent` already uses, validated by a `success_check_fn` mirroring upstream `EvalAgent.success_check_fn_score` — score is an int in 1-10, reason is a string). `PerCriterionEvalAgent.score_all_criteria` accumulates these keyed by `c["name"]` into `{c["name"]: {"score": ..., "reason": ...} for c in criteria}` — **byte-for-byte the same return shape** `BatchEvalAgent.score_all_criteria` produces today. This is the whole point: `creative_solver_caller.py`/`creative_writing_caller.py` index into this dict by criterion name downstream (rank math, W&B logging) with no awareness of which scorer produced it, so getting this shape exactly right is what makes `judge.type: sft-critic` a config-only switch rather than a reward-caller code change. Failure granularity matches the batched path too: any single criterion's `JudgeAPIError` propagates immediately (no parse-retry attempted, same as today), and a single criterion exhausting its own `max_retries` raises `JudgeParseError` for the *whole* `score_all_criteria` call — no partial-credit dict with some criteria missing, since reward callers already treat one `score_all_criteria` call as one atomic outcome for one sample (`_score_one`'s `(score, reason)` contract) and introducing partial failure here would be new, unhandled behavior for them.
+
+### 6.4 Config
+
+`creative_rzero/config.py`:
+```python
+VALID_JUDGE_TYPES = ("claude", "mock", "sft-critic")
+
+@dataclass
+class JudgeConfig:
+    type: str = "claude"          # claude | mock | sft-critic
+    model: str = "claude-sonnet-5"
+    max_tokens: int = 8192
+    http_max_retry_attempts: int = 5
+    max_workers: int = 4
+    truncation_margin_tokens: int = 16
+    low_quality_threshold: float = 2.0
+    critic_url: Optional[str] = None                     # base URL of the deployed vLLM sft-critic server — required when type=sft-critic
+    critic_model: str = "writingbench-critic-qwen-7b"      # --served-model-name the server was launched with
+```
+`_validate` gains: `type == "sft-critic"` requires `critic_url` set and starting with `http` — checked eagerly inside `_validate`, i.e. at `config.load()`, the same **startup**-time point every other required-per-run field (`run.abbr`, `challenger.model_path`) is already checked. A missing URL fails in seconds locally instead of surfacing as the first judge call's crash an hour into a run.
+
+`configs/base.yaml`'s `judge:` block gets the two new keys, defaulted to `null`/a documented placeholder like every other run-specific value in the file:
+```yaml
+judge:
+  type: claude                    # claude | mock | sft-critic — sft-critic self-hosts AQuarterMile/WritingBench-Critic-Model-Qwen-7B over HTTP; see docs/REFACTOR_PLAN.md §6
+  model: claude-sonnet-5           # judge model id (claude backend only)
+  max_tokens: 8192
+  http_max_retry_attempts: 5
+  max_workers: 4
+  truncation_margin_tokens: 16
+  low_quality_threshold: 2.0
+  critic_url: null                 # base URL of the deployed vLLM sft-critic server (modal_app.py::critic_judge_server) — required when judge.type=sft-critic, checked at config-load/startup time
+  critic_model: writingbench-critic-qwen-7b   # --served-model-name the sft-critic server was launched with
+```
+
+### 6.5 Task breakdown
+
+**T3.11 — Deploy the sft-critic model as a Modal vLLM service that scales to zero between runs**
+- Pointers: `modal_app.py` (image/app patterns, `.pip_install("vllm==0.9.1")` at ~L78); `orchestrator.py::solver_server` (~L166-210) for the health-check-then-serve shape — not reused directly for the reasons in §6.2, though its poll-until-`/health` loop is reused for the warm-up step below.
+- Do: new `modal_app.py` function/image serving `AQuarterMile/WritingBench-Critic-Model-Qwen-7B` via `vllm.entrypoints.openai.api_server` behind `@modal.web_server`, `min_containers=0` + a tuned `scaledown_window`, no auth (only we deploy this, and it's only ever up for the span of a training run — see §6.2). `modal deploy modal_app.py`, once, separately from any training run. Add `orchestrator.py::wait_for_sft_critic_judge(url, ...)` — a `solver_server`-style poll against the deployed URL — called once at the start of `run_coevolve` when `cfg.judge.type == "sft-critic"`, so a cold start (if any) happens before Phase A rather than stalling the first judge call.
+- Goal: a stable HTTPS URL serving the sft-critic model's OpenAI-compatible chat completions, billed only while a run is actually using it, with any cold-start latency absorbed before training starts rather than during it.
+- Accept: `curl https://.../v1/chat/completions -d '...'` returns a completion; `modal container list` shows 0 containers for the app some time after a run finishes; `orchestrator.py::n_training_gpus`/`aux_gpu_id` are unaffected by this change.
+
+**T3.12 — `CriticServerAgent` HTTP client**
+- Pointers: `evaluation/writing_bench/evaluator/llm.py::ClaudeAgent` (backoff/retry shape to mirror, ~L79-138); `evaluator/critic.py::CriticAgent` (in-process sibling — do not modify).
+- Do: new `evaluator/critic_server.py::CriticServerAgent`, matching `ClaudeAgent`/`MockJudgeAgent`'s public surface (`.run(prompt, ...)`), POSTing to `{critic_url}/v1/chat/completions` (OpenAI chat schema, not Anthropic Messages), with the same exponential-backoff-with-jitter retry loop bounded by `http_max_retry_attempts`, raising the existing `JudgeAPIError` (imported, not redefined) on exhaustion so downstream failure-reason handling (`failure_reasons.py`) needs no new branch. Export from `evaluator/__init__.py`.
+- Goal: a judge client that fails the same way Claude does, so every failure_reason/backoff mechanism already built for Claude (T1.4/T1.5) covers this backend for free.
+- Accept: unit test against a local fixture HTTP server — success path; 429/503 triggers backoff, not immediate failure; retry exhaustion raises `JudgeAPIError` with the last status code.
+
+**T3.13 — `per_criterion_eval_prompt.py` + `PerCriterionEvalAgent` (agent-generic) + judge-type dispatch wiring**
+- Pointers: `evaluation/writing_bench/prompt.py` (vendored source to duplicate verbatim into the new file — confirmed content-identical to [X-PLUG/WritingBench/blob/main/prompt.py](https://github.com/X-PLUG/WritingBench/blob/main/prompt.py) during design); `batch_eval_agent.py::BatchEvalAgent`/`_format_criterion`/`_strip_fences` (sibling class + reusable fence-stripping helper, same file); `creative_rzero/data/writing_prompt.py` (criterion dict shape); the duplicated `WB_JUDGE_TYPE` dispatch block in `creative_solver_caller.py` (~L209-217) and `creative_writing_caller.py` (~L221-229); `verl_entry.py::_bridge_config_to_env` (~L78-100).
+- Do: new `evaluation/writing_bench/per_criterion_eval_prompt.py` — verbatim `evaluate_system`/`evaluate_prompt` copy, "vendored, do not edit" header citing the upstream URL, per §6.4. New `PerCriterionEvalAgent(agent)` (alongside `BatchEvalAgent` in `batch_eval_agent.py`) — constructor takes any `.run()`-shaped agent, `score_all_criteria(content, query, criteria, max_retries=3)` builds one `evaluate_prompt.format(criteria=c, query=query, response=...)` call per raw criterion dict `c` (no `_format_criterion` reformatting — see §6.4's request-construction contract), reconstructs `{c["name"]: {"score", "reason"}}` per §6.4's response contract, and must not import or reference `CriticServerAgent`/vLLM/HTTP by name, so `claude`/`mock` can opt into it later without touching the class. Update both dispatch blocks to build the `agent` and the `scorer_cls` (`BatchEvalAgent` | `PerCriterionEvalAgent`) as two independent choices (the dict-dispatch sketch in §6.3), keyed off `WB_JUDGE_TYPE`, with `sft-critic` → `CriticServerAgent` + `PerCriterionEvalAgent` as the new default pairing. `_bridge_config_to_env` gains `WB_CRITIC_URL`/`WB_CRITIC_MODEL` entries alongside the existing `WB_JUDGE_*` ones.
+- Goal: `judge.type: sft-critic` is a config-only switch, same as `mock` is today — zero code edits once T3.11-T3.13 land — and batched-vs-per-criterion stops being fused to judge backend, so either scoring mode is a one-line change against any judge later (e.g. auditing whether Claude's batched scores drift from its own per-criterion scores).
+- Accept: `per_criterion_eval_prompt.py`'s `evaluate_system`/`evaluate_prompt` match the upstream file byte-for-byte (a test pins this, the same way `prompt.py`'s own "do not edit" comment is an unenforced version of this promise — enforce it here); a unit test feeds `PerCriterionEvalAgent` a 3-criterion list against a fake agent and asserts the request's `criteria` field is the raw dict's `str()` (not a `_format_criterion` block) and the returned dict is keyed by all 3 criterion names with `{"score", "reason"}` values; rank/uncertainty reward math tests (T3.8, once they exist) run unmodified against `PerCriterionEvalAgent`'s output shape regardless of which agent it wraps; a unit test constructs `PerCriterionEvalAgent(MockJudgeAgent(...))` directly (no sft-critic config involved) and gets back the same shape `BatchEvalAgent(MockJudgeAgent(...))` does; switching `judge.type: claude → sft-critic` in an exp yaml is the only diff between two otherwise-identical run configs.
+
+**T3.14 — Tests, no GPU required**
+- Do: `CriticServerAgent` tested against a local fixture server (`pytest-httpserver` or a stdlib `http.server` in a thread), not real vLLM — matches the mock-first testing philosophy already established for Claude (T3.1). `judge.type: sft-critic` config validation: loading an exp config with `judge.type: sft-critic` and no `critic_url` raises `ConfigError` at `config.load()` (startup time), per §6.4.
+- Accept: `pytest`, no network, no GPU; covers exactly the failure modes listed in T3.12's Accept line plus the missing-`critic_url` startup check.
+
+**Where this sits in the phase plan:** independent of the Phase-3 reward registry (T3.1-T3.10) — this is a third judge *backend*, not a reward *strategy* — but built on `JudgeConfig`/`_validate`, which already exist in `config.py`. Slots naturally after T3.1/T3.2 (judge client extraction) if that work lands first; if it hasn't, T3.11-T3.14 proceed directly against today's `evaluation/writing_bench/evaluator/` layout as described above, no reordering required.
+
+**Implemented 2026-08-11 (branch `feat/sft-critic-judge`).** T3.12-T3.14 landed as designed; T3.11's Modal service *code* landed (`modal_app.py::critic_judge_server`, `orchestrator.py::wait_for_sft_critic_judge`) but has not been `modal deploy`'d — that's a real, billed, shared-infra action and is deliberately left for explicit confirmation before running. Notes from implementation:
+
+- Two bugs the tests caught before any GPU/deploy spend, exactly the point of building the tests alongside the code: (1) `evaluator/critic_server.py` transitively imports `vllm` via `evaluator/__init__.py -> critic.py` even though `CriticServerAgent` itself never touches vLLM — same pre-existing sharp edge `test_mock_judge.py`/`test_verl_entry.py` already work around with a fake `vllm` module, now also needed in `tests/test_critic_server_agent.py`. (2) `MockJudgeAgent` (`evaluator/mock.py`) was hard-coupled to the batched prompt's "Name: X" line format for extracting criterion names; fed the per-criterion prompt (no such lines — the raw dict is embedded instead), it returned `{}` and every mock-backed `PerCriterionEvalAgent` call failed parsing. Fixed by having it fall back to the single `{"score", "reason"}` shape when no names are found, so `PerCriterionEvalAgent(MockJudgeAgent(...))` — the T3.13 Accept criterion — actually holds, and the dry-run mock judge (T4.4, when it exists) will cover per-criterion scoring too, not just batched.
+- `judge.type: sft-critic` dispatch landed in both reward callers' `_get_agent()` exactly per the §6.3 dict-dispatch sketch (`agent` and `scorer_cls` chosen independently), with a third change made after review: **no silent fallback to `claude`.** The original dispatch had `if mock: ... elif sft-critic: ... else: ClaudeAgent(...)` — any unrecognized/unset `WB_JUDGE_TYPE` silently became Claude. Config validation (`VALID_JUDGE_TYPES`) already prevents this on the intended path, but that's not a reason for this code to also be silently permissive against a stray manual override. Changed to explicit `elif judge_type == "claude"` with a final `else: raise ValueError(...)` — in both files identically, matching their existing duplication. Regression-tested (`test_unrecognized_judge_type_raises_no_silent_claude_fallback`, parametrized over `None`/`""`/typos).
+- `CriticServerAgent` sends **no auth** — reviewed and deliberately decided against a bearer token (an earlier draft added one against vLLM's `--api-key`): the deployed server is not a long-lived public service, only we deploy it, and `min_containers=0` means it's only ever up for the span of a training run. Revisit if that deployment model changes.
+- `modal_app.py::critic_judge_server` reuses the existing (heavy) training `image` rather than building a dedicated lighter one, to avoid a second, separately-maintained build target during Week 1 — noted as a deliberate simplification, not a final decision.
+- All 175 repo tests pass (`(venv) pytest tests/ -q`), including the new/extended files covering: config validation, prompt fidelity (pinned sha256, cross-checked against the already-vendored `prompt.py`), the HTTP client's retry/backoff/error semantics, the per-criterion request/response contract, dispatch wiring (including the no-fallback error path), and the orchestrator's warm-up poll (success / cold-start-retry / timeout / called-once-per-run / not-called-for-other-judge-types).
+- Not yet done: actually running `modal deploy` (T3.11's literal deployment step) and a real end-to-end call against the deployed critic model — both require GPU/Modal spend and are out of scope until explicitly requested.
+
 Rationale for the gate: the single most expensive failure mode this week is discovering a wiring bug during the first GPU run. The dry-run must exercise: config load → prompt gen (mock) → parquet → resolved verl YAML render → `verl_entry` dispatch with MockJudge → rank/variance reward math → health-based checkpoint selection → orchestrator state save/resume.

@@ -144,6 +144,73 @@ def test_mock_judge_type_routes_caller_to_mock_agent(verl_entry, fake_vllm_modul
     assert isinstance(agent.agent, MockJudgeAgent)
 
 
+def test_sft_critic_judge_type_routes_caller_to_critic_agent(verl_entry, fake_vllm_module, monkeypatch, tmp_path):
+    """judge.type=sft-critic must make the reward caller build a
+    PerCriterionEvalAgent(CriticServerAgent), not BatchEvalAgent(ClaudeAgent)
+    — and _bridge_config_to_env must carry WB_CRITIC_URL/WB_CRITIC_MODEL."""
+    from creative_rzero.config import load, save_resolved
+
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    monkeypatch.setenv("REMOTE_REPO_PATH", str(REPO_ROOT))
+    for name in list(sys.modules):
+        if "creative_solver_caller" in name:
+            monkeypatch.delitem(sys.modules, name)
+
+    cfg = load(
+        TINY_EXP,
+        cli_args=["judge.type=sft-critic", "judge.critic_url=https://fake-critic.modal.run"],
+    )
+    out = save_resolved(cfg, tmp_path)
+    monkeypatch.setenv("EXPERIMENT_CONFIG_PATH", str(out))
+
+    impl_module = verl_entry._get_impl("solver").__module__
+    caller = sys.modules[impl_module]
+    agent = caller._get_agent()
+
+    from batch_eval_agent import PerCriterionEvalAgent
+    from evaluator import CriticServerAgent
+
+    assert isinstance(agent, PerCriterionEvalAgent)
+    assert isinstance(agent.agent, CriticServerAgent)
+
+    import os
+
+    assert os.environ["WB_CRITIC_URL"] == "https://fake-critic.modal.run"
+    assert os.environ["WB_CRITIC_MODEL"] == cfg.judge.critic_model
+
+
+@pytest.mark.parametrize("bogus_judge_type", [None, "", "Claude", "gpt-4", "sft_critic"])
+def test_unrecognized_judge_type_raises_no_silent_claude_fallback(
+    verl_entry, resolved_config_env, fake_vllm_module, monkeypatch, bogus_judge_type
+):
+    """An unset/typo'd/unrecognized WB_JUDGE_TYPE must fail loud in the
+    reward caller itself, not silently fall through to ClaudeAgent — config
+    validation (creative_rzero/config.py VALID_JUDGE_TYPES) is
+    defense-in-depth, not the only guard against a wrong/expensive judge
+    getting used unnoticed. Imports both caller modules the normal way
+    (through a valid config, via verl_entry._get_impl) so this exercises
+    the real modules already in sys.modules, then overrides WB_JUDGE_TYPE
+    to the bogus value afterward — mimicking a stray manual override rather
+    than anything the config bridge itself would ever produce."""
+    monkeypatch.setenv("REMOTE_REPO_PATH", str(REPO_ROOT))
+    for name in list(sys.modules):
+        if "creative_solver_caller" in name or "creative_writing_caller" in name:
+            monkeypatch.delitem(sys.modules, name)
+
+    solver_module = sys.modules[verl_entry._get_impl("solver").__module__]
+    challenger_module = sys.modules[verl_entry._get_impl("challenger").__module__]
+
+    if bogus_judge_type is None:
+        monkeypatch.delenv("WB_JUDGE_TYPE", raising=False)
+    else:
+        monkeypatch.setenv("WB_JUDGE_TYPE", bogus_judge_type)
+
+    for caller in (solver_module, challenger_module):
+        caller._agent = None  # reset the lazy singleton between parametrize cases
+        with pytest.raises(ValueError, match="not a recognized judge type"):
+            caller._get_agent()
+
+
 def test_materialized_verl_config_carries_role_and_abs_reward_path(tmp_path):
     """steps/train_verl.py's side of the contract: reward_function_kwargs.role
     is set and reward_function is an existing absolute path."""

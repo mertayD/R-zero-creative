@@ -55,6 +55,16 @@ WANDB_API_KEY       = os.environ.get("WANDB_API_KEY", "")
 PERPLEXITY_API_KEY  = os.environ.get("PERPLEXITY_API_KEY", "")
 HUGGINGFACENAME     = os.getenv("HUGGINGFACENAME", "")
 
+# sft-critic judge service (judge.type=sft-critic, REFACTOR_PLAN.md §6) —
+# deployed independently of any training run, see critic_judge_server below.
+# No auth: only we deploy this, and it's only ever up for the span of a
+# training run (min_containers=0 + scaledown_window below scale it back to
+# zero shortly after), not a long-lived public service.
+CRITIC_MODEL_ID              = "AQuarterMile/WritingBench-Critic-Model-Qwen-7B"
+CRITIC_SERVED_NAME           = os.getenv("CRITIC_SERVED_NAME", "writingbench-critic-qwen-7b")
+CRITIC_JUDGE_GPU             = os.getenv("CRITIC_JUDGE_GPU", "L4")
+CRITIC_JUDGE_SCALEDOWN_WINDOW_S = int(os.getenv("CRITIC_JUDGE_SCALEDOWN_WINDOW_S", "3600"))
+
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 # Same image as modal_run.py (kept in lockstep until that file is deleted
@@ -236,6 +246,52 @@ def train_solver(config: str, overrides: list[str] = [], run_ts: str = "",
     volume.commit()
     print(f"=== Solver training complete — checkpoint: {ckpt} ===")
     return ckpt
+
+
+@app.function(
+    image=image,  # reuses the training image (already has vllm==0.9.1 + the
+                  # repo mounted) rather than a second, separately-maintained
+                  # build target — heavier than strictly necessary for a
+                  # single served model, deliberately kept simple for now.
+    gpu=CRITIC_JUDGE_GPU,
+    secrets=[runtime_secret],       # HF_TOKEN, in case CRITIC_MODEL_ID ever becomes gated/private
+    min_containers=0,               # scale to zero between runs — no GPU billed while idle
+    scaledown_window=CRITIC_JUDGE_SCALEDOWN_WINDOW_S,
+    timeout=86400,
+)
+@modal.web_server(port=8000, startup_timeout=600)
+def critic_judge_server():
+    """Persistent vLLM OpenAI-compatible server for the sft-critic judge
+    (judge.type=sft-critic — REFACTOR_PLAN.md §6). Deploy once, independent
+    of any training run:
+
+        modal deploy modal_app.py
+
+    The resulting URL (`https://<workspace>--<app>-critic-judge-server.modal.run`)
+    is stable for the life of this deployment regardless of whether a
+    container is currently running behind it — set it once as
+    `judge.critic_url` in the experiment config. `min_containers=0` means
+    Modal's own autoscaling gives start-before-training/stop-after behavior
+    for free: no container (no GPU cost) until the first request of a run,
+    `scaledown_window` idle seconds after the last one before it scales back
+    to zero. `orchestrator.py::wait_for_sft_critic_judge` warms this up once
+    per co-evolution run, before Phase A, so the cold start (if any) doesn't
+    stall the first judge call mid-training.
+
+    No auth on this endpoint: only we deploy it, and it's only ever up for
+    the span of a training run (min_containers=0/scaledown_window above), not
+    a long-lived public service. If that changes, add vLLM's --api-key.
+    """
+    import subprocess
+
+    subprocess.Popen([
+        "python", "-m", "vllm.entrypoints.openai.api_server",
+        "--model", CRITIC_MODEL_ID,
+        "--served-model-name", CRITIC_SERVED_NAME,
+        "--port", "8000",
+        "--dtype", "auto",
+        "--disable-log-requests",
+    ])
 
 
 @app.function(
