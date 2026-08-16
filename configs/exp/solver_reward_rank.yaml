@@ -1,0 +1,64 @@
+# A/B pair with solver_reward_raw.yaml — isolates the effect of
+# rewards.solver.type on solver GRPO training. Every other knob (seed,
+# challenger, solver sizes, judge) is identical between the two files; only
+# run.abbr and rewards.solver.type differ. Diff them to confirm before
+# launching either.
+#
+# num_iters: 1 is deliberate — past round 1 the two runs' solver policies
+# diverge, so from iteration 2 onward the challenger (which queries the
+# solver as a frozen oracle) would see different data in each run and the
+# comparison stops being apples-to-apples. Round 1 is the clean ablation;
+# extend to num_iters > 1 as a *second*, separate experiment once round 1
+# shows a difference worth chasing into the co-evolution loop.
+run:
+  abbr: rankraw-a-rank
+  profile: smoke
+  seed: 42
+  num_iters: 1
+  experiment: solver-reward-test
+
+challenger:
+  model_path: Qwen/Qwen3-0.6B
+  max_steps: 2
+  rollout_n: 2
+  num_train: 2
+  num_val: 1
+  max_response_length: 2048
+
+solver:
+  model_path: Qwen/Qwen3-0.6B
+  max_steps: 2            # enough steps for a reward-formula effect on training dynamics to show up
+  rollout_n: 2              # G — bigger group gives rank more resolution and raw more within-group spread
+  num_train: 2
+  num_val: 1
+  max_response_length: 3072
+
+judge:
+  type: sft-critic                      # random scores, no Perplexity/Claude call — this run is wiring validation, not judge quality
+  critic_url: https://columbia-daplab--r-zero-creative-critic-judge-server.modal.run
+  critic_model: writingbench-critic-qwen-7b
+  max_workers: 2                  # only ~4 concurrent samples exist at this size
+
+rewards:
+  solver:
+    type: rank                # <-- the only reward-formula knob; "raw" in the paired -raw.yaml
+
+verl:
+  data:
+    # Qwen3 chat templates default to thinking mode; keep it off so the
+    # tiny response budgets above go to the answer, not reasoning tokens
+    # (same reasoning as validation_tiny.yaml).
+    apply_chat_template_kwargs:
+      enable_thinking: false
+  worker:
+    rollout:
+      # base.yaml's tensor_parallel_size: 2 needs 2 GPUs for the rollout
+      # engine, but n_gpus_per_node: 1 below only gives it 1 — that
+      # mismatch is what threw "rollout world size: 1 is not divisible by
+      # tp size: 2". Match validation_tiny.yaml: tp=1 for a single-GPU
+      # training worker.
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.6
+  trainer:
+    n_gpus_per_node: 1     # matches CREATIVE_GPU="A100-40GB:2": 1 GPU here + 1 reserved for the frozen oracle
+    logger: ["console", "wandb"]

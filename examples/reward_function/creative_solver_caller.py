@@ -1,5 +1,6 @@
 """
-Creative writing solver reward function — Pairwise Tournament Normalized Rank.
+Creative writing solver reward function — judge scoring + orchestration,
+with the reward formula itself pluggable via creative_rzero/rewards/.
 
 Called by VERL at each GRPO training step with the solver model's rollout outputs.
 Each predict is a raw creative writing response (plain text, no required format).
@@ -28,15 +29,22 @@ Data flow
     3. Score all responses in parallel with BatchEvalAgent (one Claude call each).
        Concurrency capped by CREATIVE_SCORER_MAX_WORKERS (default 4) to stay
        within the Claude API rate limit (~50 RPM).
-    4. Within each group rank by avg criterion score and assign normalised rank:
-
-           R_i = (G_eff - rank_i) / (G_eff - 1)    rank_i ∈ {1 … G_eff}  (1 = best)
-
-       Range [0,1], mean 0.5 → GRPO advantages are always zero-centred.
+    4. Turn each group's avg criterion scores into `overall` by delegating
+       to a pluggable reward strategy (creative_rzero/rewards/registry.py,
+       T3.3), selected by CREATIVE_SOLVER_REWARD_TYPE (bridged from
+       rewards.solver.type — see verl_entry.py::_bridge_config_to_env).
+       Two strategies exist today (creative_rzero/rewards/solver/):
+         rank (default) — normalised within-group rank, see rank.py
+         raw            — judge's own score rescaled to [0,1], see raw.py
+       Each strategy is self-contained and independently unit-testable
+       against a GroupScores fixture — no judge, no env vars. Adding a new
+       formula (zscore, pairwise, ...) means a new strategy file plus one
+       line in an experiment config, not a new branch here.
 
 Return format per sample:
-    {"overall": rank_reward, "format": 1.0, "accuracy": avg_score / 10.0}
-VERL uses `overall` for the GRPO update; `accuracy` is logged as a metric.
+    {"overall": <rank or raw reward>, "format": 1.0, "accuracy": avg_score / 10.0}
+VERL uses `overall` for the GRPO update; `accuracy` is logged as a metric
+regardless of reward type, so the two modes stay comparable on W&B.
 """
 
 import json
@@ -46,8 +54,6 @@ from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from statistics import mean
 from typing import Dict, List, Tuple
-
-from scipy.stats import rankdata
 
 # Ensure repo root and writing_bench dir are importable
 _REPO   = os.environ.get("REMOTE_REPO_PATH", "/root/R-Zero")
@@ -60,6 +66,7 @@ os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost,0.0.0.0")
 
 from creative_rzero.data.writing_prompt import WritingPrompt
 from creative_rzero.failure_reasons import FailureReason
+from creative_rzero.rewards.registry import GroupScores
 from creative_rzero.utils import find_cjk_matches
 from evaluation.shared.utilities import split_thinking
 from batch_eval_agent import JudgeAPIError, JudgeParseError, JudgeInputError
@@ -85,22 +92,28 @@ def _looks_truncated(text: str, max_response_length: int) -> bool:
     approx_tokens = len(text) / _APPROX_CHARS_PER_TOKEN
     return approx_tokens >= max_response_length - _TRUNCATION_MARGIN_TOKENS
 
-# Two independent, configurable gates that skip ranking a group instead of
-# ranking noise. Both assign a *uniform* reward across the group — zero GRPO
-# advantage either way — so their job is bookkeeping + skipping noise-ranking,
-# not punishment:
+# Two independent, configurable *definitions* — computed once here, shared
+# by every reward strategy so they can't disagree about which groups they
+# describe. What a strategy does in response is its own decision (see
+# creative_rzero/rewards/solver/{rank,raw}.py) — this block only decides
+# whether each one applies:
 #   all_failed   — every scoreable sample in the group has failure_reason !=
-#                  "ok" (nothing to rank at all) → uniform reward 0.0.
+#                  "ok" (nothing to score at all).
 #   low_quality  — group scored fine, but its best raw score (1-10 scale) is
-#                  still at or below _LOW_QUALITY_THRESHOLD → ranking would
-#                  just be ranking indistinguishable garbage → uniform reward
-#                  0.5
-#                  (treated like the G_eff==1 neutral case).
+#                  still at or below _LOW_QUALITY_THRESHOLD (indistinguishable
+#                  low-quality content, not a scoring failure).
 # The old `_MIN_SCORE = 0.3` compared against a 1-10 scale — i.e. it could
 # only ever fire when every sample was already a hard failure (raw_score
 # exactly 0.0), so it was accidentally doing all_failed's job while being
 # undocumented as a "low quality" gate that never actually fired.
 _LOW_QUALITY_THRESHOLD = float(os.environ.get("CREATIVE_LOW_QUALITY_THRESHOLD", "2.0"))
+
+# Selects the reward strategy from creative_rzero/rewards/registry.py —
+# "rank" (default) or "raw" today, see module docstring step 4. Bridged
+# from rewards.solver.type by verl_entry.py::_bridge_config_to_env;
+# resolved (and validated) lazily by _get_strategy() below, same pattern
+# as WB_JUDGE_TYPE in _get_agent().
+_REWARD_TYPE = os.environ.get("CREATIVE_SOLVER_REWARD_TYPE", "rank")
 # ---------------------------------------------------------------------------
 # Per-rollout JSONL logger
 # ---------------------------------------------------------------------------
@@ -121,14 +134,23 @@ _LOW_QUALITY_THRESHOLD = float(os.environ.get("CREATIVE_LOW_QUALITY_THRESHOLD", 
 #   truncated     — response length is within a few tokens of
 #                   SOLVER_MAX_RESPONSE_LENGTH (best-effort, char-based proxy)
 #   is_low_quality — group-level flag: every scoreable sample in this
-#                   prompt's group scored <= _LOW_QUALITY_THRESHOLD, so the
-#                   group got a uniform 0.5 reward instead of being ranked.
-#                   Distinguishes "scored fine but uniformly bad content"
-#                   from a genuine all_failed collapse (rank_reward == 0.0),
-#                   since both would otherwise look identical to a consumer
-#                   only checking failure_reason. See select_checkpoint.py.
-#   rank_reward   — normalised rank reward [0, 1] (GRPO signal)
-#   accuracy      — raw_score / 10  (logged metric)
+#                   prompt's group scored <= _LOW_QUALITY_THRESHOLD (the
+#                   shared definition above). What happens to the reward as
+#                   a result is up to the active strategy — RankReward
+#                   overrides to a uniform 0.5, RawReward leaves it as-is
+#                   (see creative_rzero/rewards/solver/{rank,raw}.py) — so
+#                   this flag is bookkeeping regardless of mode. Distinguishes
+#                   "scored fine but uniformly bad content" from a genuine
+#                   all_failed collapse (rank_reward == 0.0), since both
+#                   would otherwise look identical to a consumer only
+#                   checking failure_reason. See select_checkpoint.py.
+#   rank_reward   — the `overall` GRPO reward produced by the active
+#                   strategy — despite the field name, holds a rank reward
+#                   [0, 1] in rank mode or a rescaled raw score [0, 1] in raw
+#                   mode. Field name kept as-is: creative_rzero/steps/report.py
+#                   reads this key for its solver-reward fallback regardless
+#                   of which strategy produced it.
+#   accuracy      — raw_score / 10  (logged metric, same in both modes)
 #
 # The file is uploaded to W&B as a Table by creative_solver_smoke.sh after
 # training completes.
@@ -183,6 +205,31 @@ def _log_solver_rollouts(
 # ---------------------------------------------------------------------------
 _agent = None
 _wandb_run = None
+_strategy = None
+
+
+def _get_strategy():
+    """Resolve _REWARD_TYPE to a RewardStrategy instance via the T3.3
+    registry (creative_rzero/rewards/registry.py). Importing
+    creative_rzero.rewards.solver is what registers "rank"/"raw" — done
+    here, lazily, so a bad CREATIVE_SOLVER_REWARD_TYPE fails loud on first
+    use instead of at module import."""
+    global _strategy
+    if _strategy is None:
+        from creative_rzero.rewards.registry import get_strategy
+        import creative_rzero.rewards.solver  # noqa: F401 — registers rank/raw strategies
+
+        try:
+            strategy_cls = get_strategy(_REWARD_TYPE)
+        except KeyError as e:
+            raise ValueError(
+                f"CREATIVE_SOLVER_REWARD_TYPE={_REWARD_TYPE!r} is not a recognized solver "
+                f"reward type ({e}). It should be set by verl_entry.py::_bridge_config_to_env "
+                "from rewards.solver.type in the experiment config — check "
+                "EXPERIMENT_CONFIG_PATH if this fired unexpectedly."
+            ) from None
+        _strategy = strategy_cls()
+    return _strategy
 
 
 def _get_wandb():
@@ -298,55 +345,6 @@ def _score_one(agent, response_text: str, wp: WritingPrompt) -> Tuple[float, str
 
 
 # ---------------------------------------------------------------------------
-# Normalised rank reward
-# ---------------------------------------------------------------------------
-
-def _assign_normalised_rank_rewards(
-    eval_scores: Dict[int, float],
-) -> Dict[int, float]:
-    """
-    Convert {sample_idx: avg_score} into normalised rank rewards.
-
-    Uses G_eff = len(eval_scores) so the formula adapts when some rollouts
-    fail to generate (M requested → M-1 produced).
-
-        R_i = (G_eff - rank_i) / (G_eff - 1)    rank_i starts at 1 (best)
-
-    Ties get the average of the ranks they span (scipy's "average" method),
-    so equal scores get equal rewards and contribute zero GRPO advantage
-    between themselves — with plain ordinal ranks, tie-breaking (typically
-    by original order) injects pure noise, and most G>=2 groups have at
-    least one tie on a 1-10 judge scale.
-
-    G_eff == 1 → {idx: 0.5}  (neutral, no signal, avoids division by zero).
-    All-equal group → every sample gets the average rank → all 0.5.
-
-    Callers are expected to have already gated out all_failed/low_quality
-    groups (see _LOW_QUALITY_THRESHOLD above) before calling this — it
-    always ranks whatever it's given.
-    """
-    G_eff = len(eval_scores)
-
-    if G_eff == 0:
-        return {}
-
-    if G_eff == 1:
-        idx = next(iter(eval_scores))
-        return {idx: 0.5}
-
-    sample_idxs = list(eval_scores.keys())
-    scores = [eval_scores[idx] for idx in sample_idxs]
-    # Negate so the highest score gets rank 1 (rankdata ranks ascending).
-    ranks = rankdata([-s for s in scores], method="average")
-
-    rewards: Dict[int, float] = {}
-    for sample_idx, rank in zip(sample_idxs, ranks):
-        normalized_reward = (G_eff - rank) / (G_eff - 1)
-        rewards[sample_idx] = round(float(normalized_reward), 4)
-    return rewards
-
-
-# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -355,7 +353,9 @@ def compute_score(
     ground_truths: List[str],
 ) -> List[Dict[str, float]]:
     """
-    Compute per-sample normalised rank rewards for VERL GRPO solver training.
+    Compute per-sample solver rewards for VERL GRPO training, via the
+    active reward strategy (CREATIVE_SOLVER_REWARD_TYPE — see
+    creative_rzero/rewards/registry.py and _get_strategy() above).
 
     Args:
         predicts:      Flat list of solver writing responses (length N × G).
@@ -365,10 +365,11 @@ def compute_score(
 
     Returns:
         List[Dict] aligned with predicts:
-          overall  — rank reward ∈ [0, 1]       (GRPO update signal)
+          overall  — reward ∈ [0, 1] from the active strategy (GRPO update signal)
           format   — always 1.0 (data pre-screened at parquet build)
           accuracy — avg criterion score / 10   (logging metric)
     """
+    strategy  = _get_strategy()
     agent     = _get_agent()
     n_samples = len(predicts)
 
@@ -458,7 +459,7 @@ def compute_score(
         max_workers = 0
 
     # ------------------------------------------------------------------ #
-    # Step 3 — per-group normalised rank rewards                          #
+    # Step 3 — per-group rewards, via the active strategy                 #
     # ------------------------------------------------------------------ #
     rewards: List[Dict[str, float]] = [{} for _ in range(n_samples)]
     n_all_failed_groups: int = 0
@@ -481,22 +482,22 @@ def compute_score(
             bool(scoreable) and not all_failed and max(scoreable.values()) <= _LOW_QUALITY_THRESHOLD
         )
         low_quality_groups[prompt_id] = low_quality
-
         if all_failed:
             n_all_failed_groups += 1
-            rank_rewards = {idx: 0.0 for idx in scoreable}
         elif low_quality:
             n_low_quality_groups += 1
-            rank_rewards = {idx: 0.5 for idx in scoreable}
-        else:
-            rank_rewards = _assign_normalised_rank_rewards(scoreable)
+
+        group_reward = strategy.score_group(
+            GroupScores(scores=scoreable, all_failed=all_failed, low_quality=low_quality)
+        )
+        overall_rewards = group_reward.overall
 
         for idx, _ in group["samples"]:
             if idx in language_filtered:
                 rewards[idx] = {"overall": 0.0, "format": 0.0, "accuracy": 0.0}
             else:
                 rewards[idx] = {
-                    "overall":  rank_rewards.get(idx, 0.0),
+                    "overall":  overall_rewards.get(idx, 0.0),
                     "format":   1.0,
                     "accuracy": round(raw_scores[idx] / 10.0, 4),
                 }
@@ -505,11 +506,12 @@ def compute_score(
     # Step 4 — diagnostic log (mean should be ≈ 0.500)                   #
     # ------------------------------------------------------------------ #
     overall_values = [r["overall"] for r in rewards]
+    expected_note = "(expected≈0.500)" if _REWARD_TYPE == "rank" else "(raw mode — no fixed expectation)"
     print(
         f"[creative_solver_caller] "
         f"groups={len(groups)}  samples={n_samples}  workers={max_workers}  "
-        f"language_filtered={len(language_filtered)}  "
-        f"mean_rank_reward={mean(overall_values):.3f}  (expected≈0.500)",
+        f"reward_type={_REWARD_TYPE}  language_filtered={len(language_filtered)}  "
+        f"mean_overall_reward={mean(overall_values):.3f}  {expected_note}",
         flush=True,
     )
 

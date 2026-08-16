@@ -29,12 +29,13 @@ BASE_CONFIG_PATH = REPO_ROOT / "configs" / "base.yaml"
 
 VALID_PROFILES = ("dryrun", "smoke", "small", "full")
 VALID_JUDGE_TYPES = ("claude", "mock", "sft-critic")
-# Stand-in for the Phase-3 reward registry (T3.3), which doesn't exist yet.
-# Only the strategies that actually exist today are accepted. Once
-# rewards/registry.py lands, swap these for `registry.SOLVER_REWARDS.keys()`
-# / `registry.CHALLENGER_REWARDS.keys()`.
-# TODO(T3.4): add "zscore", "raw", "pairwise" once those solver strategies exist.
-VALID_SOLVER_REWARDS = ("rank",)
+# `creative_rzero/rewards/registry.py` (T3.3) now exists for the solver
+# role, but strategies still need a name listed here too — see
+# `creative_rzero/rewards/README.md` for why config validation, the
+# registry, and verl_entry's dispatch gate are three separate allow-lists
+# during this transitional period.
+# TODO(T3.4): add "zscore", "pairwise" once those solver strategies exist.
+VALID_SOLVER_REWARDS = ("rank", "raw")
 # TODO(T3.5): add "variance", "target_band" once those challenger strategies exist.
 VALID_CHALLENGER_REWARDS = ("uncertainty",)
 
@@ -49,6 +50,7 @@ class RunConfig:
     profile: str = "smoke"  # dryrun | smoke | small | full
     seed: int = 42
     num_iters: int = 1  # co-evolution rounds (challenger phase + solver phase each)
+    experiment: Optional[str] = None  # stable W&B group name shared across related launches (e.g. a model sweep); unset falls back to a per-launch abbr+timestamp group
 
 
 @dataclass

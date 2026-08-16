@@ -47,14 +47,16 @@ for _p in (str(_REPO_ROOT), str(_WB_DIR)):
 
 VALID_ROLES = ("challenger", "solver")
 
-# role -> (module path, the strategy name that module implements today).
+# role -> (module path, the strategy names that module implements today).
 # The strategy name is checked against `rewards.<role>.type` so a config
 # asking for a strategy these legacy callers don't implement fails loudly
-# instead of silently computing the wrong reward.
+# instead of silently computing the wrong reward. creative_solver_caller
+# implements both "rank" and "raw" internally, switched by the
+# CREATIVE_SOLVER_REWARD_TYPE env var bridged below.
 # TODO(dayanc): replace this dict with a registry lookup once the Phase-3 registry is in place.
 _ROLE_IMPLS = {
-    "solver": ("examples.reward_function.creative_solver_caller", "rank"),
-    "challenger": ("examples.reward_function.creative_writing_caller", "uncertainty"),
+    "solver": ("examples.reward_function.creative_solver_caller", ("rank", "raw")),
+    "challenger": ("examples.reward_function.creative_writing_caller", ("uncertainty",)),
 }
 
 _impl_cache: Dict[str, Callable] = {}
@@ -95,6 +97,7 @@ def _bridge_config_to_env(cfg) -> None:
         # solver caller (creative_solver_caller.py)
         "SOLVER_MAX_RESPONSE_LENGTH": cfg.solver.max_response_length,
         "CREATIVE_LOW_QUALITY_THRESHOLD": cfg.judge.low_quality_threshold,
+        "CREATIVE_SOLVER_REWARD_TYPE": cfg.rewards.solver.type,
         # challenger caller (creative_writing_caller.py)
         "CHALLENGER_MAX_RESPONSE_LENGTH": cfg.challenger.max_response_length,
         "CREATIVE_SOLVER_PORT": cfg.challenger.solver_query.port,
@@ -114,12 +117,12 @@ def _get_impl(role: str) -> Callable:
         )
 
     cfg = _load_experiment_config()
-    module_path, implemented_strategy = _ROLE_IMPLS[role]
+    module_path, implemented_strategies = _ROLE_IMPLS[role]
     configured_strategy = cfg.rewards[role].type
-    if configured_strategy != implemented_strategy:
+    if configured_strategy not in implemented_strategies:
         raise ValueError(
             f"rewards.{role}.type={configured_strategy!r} is not available yet — the "
-            f"pre-registry caller behind verl_entry implements only {implemented_strategy!r} "
+            f"pre-registry caller behind verl_entry implements only {implemented_strategies!r} "
             "(the T3.3/T3.4/T3.5 registry adds the rest)."
         )
 

@@ -106,6 +106,7 @@ class CoevolveState:
     next_phase: str  # "challenger" | "solver"
     current_challenger: str
     current_solver: str
+    completed: bool = False
 
     def save(self, state_file: Path) -> None:
         state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -116,6 +117,10 @@ class CoevolveState:
         if not state_file.exists():
             return None
         return cls(**json.loads(state_file.read_text()))
+
+    def mark_completed(self, state_file: Path) -> None:
+        self.completed = True
+        self.save(state_file)
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +397,39 @@ def _wandb_summary_run(cfg: ExperimentConfig, paths: RunPaths, wandb_group: str)
     except Exception as e:
         print(f"[W&B] Summary run skipped: {e}")
 
-
+def run_challenger_only(
+        cfg: ExperimentConfig,
+        storage: str | Path,
+        train_challenger_fn: Callable[[ExperimentConfig, str, int], str],
+        commit_fn: Callable[[], None] = lambda: None,
+        reload_fn: Optional[Callable[[], None]] = None,
+):
+    if cfg.judge.type == "sft-critic":
+        # One warm-up for the whole run, not per phase/iteration — the
+        # deployed service's scaledown_window is sized to comfortably span
+        # the gap between phases (REFACTOR_PLAN.md §6.2).
+        wait_for_sft_critic_judge(cfg.judge.critic_url)
+    run_ts = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    state = CoevolveState(
+        run_ts=run_ts,
+        wandb_group=cfg.run.experiment or f"challenger_only_{cfg.run.abbr}_{run_ts}",
+        next_iter=1,
+        next_phase="challenger",
+        current_challenger=cfg.challenger.model_path,
+        current_solver=cfg.solver.model_path,
+    )
+    paths = RunPaths(storage, cfg.run.abbr, run_ts, 1)
+    state.save(paths.state_file())
+    print(f"[FRESH] Starting challenger-only run_ts={run_ts}")
+    os.environ.setdefault("WANDB_RUN_GROUP", state.wandb_group)
+    _wandb_summary_run(cfg, paths, state.wandb_group)
+    challenger_ckpt = train_challenger_fn(cfg, run_ts, 1)
+    verify_checkpoint(f"Challenger iter{1}", challenger_ckpt, reload_fn)
+    upload_parquets_to_hf(paths, "challenger")
+    state.mark_completed(paths.state_file())
+    commit_fn()
+    return challenger_ckpt
+    
 def run_coevolve(
     cfg: ExperimentConfig,
     storage: str | Path,
@@ -429,7 +466,7 @@ def run_coevolve(
         run_ts = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         state = CoevolveState(
             run_ts=run_ts,
-            wandb_group=f"coevolve_{cfg.run.abbr}_{run_ts}",
+            wandb_group=cfg.run.experiment or f"coevolve_{cfg.run.abbr}_{run_ts}",
             next_iter=1,
             next_phase="challenger",
             current_challenger=base_challenger,
@@ -509,4 +546,5 @@ def run_coevolve(
     print(f" Final challenger : {state.current_challenger}")
     print(f" Final solver     : {state.current_solver}")
     print(f"{'=' * 58}")
+    
     return state.current_challenger, state.current_solver

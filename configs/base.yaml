@@ -20,6 +20,7 @@ run:
   profile: smoke           # smoke | small | full — controls run size (steps, batch sizes, judge concurrency)
   seed: 42                 # shared seed for domain sampling, prompt generation, and dataset shuffling
   num_iters: 1             # co-evolution rounds; each round = one challenger training phase + one solver training phase
+  experiment: null         # stable W&B group name shared across related launches (e.g. "model-sweep" to collect several challenger-only runs on different base models under one group); unset falls back to a per-launch abbr+timestamp group
 
 # ---------------------------------------------------------------------------
 # Challenger role — trains the model that generates creative-writing prompts
@@ -62,14 +63,14 @@ solver:
 # shared by both the challenger and solver reward pipelines.
 # ---------------------------------------------------------------------------
 judge:
-  type: claude                    # claude | mock | sft-critic — mock returns deterministic scores for offline testing; sft-critic self-hosts AQuarterMile/WritingBench-Critic-Model-Qwen-7B over HTTP (see docs/REFACTOR_PLAN.md §6)
-  model: claude-sonnet-5           # judge model id (claude backend only)
+  type: sft-critic                    # claude | mock | sft-critic — mock returns deterministic scores for offline testing; sft-critic self-hosts AQuarterMile/WritingBench-Critic-Model-Qwen-7B over HTTP (see docs/REFACTOR_PLAN.md §6)
+  model: nil           # judge model id (claude backend only eg, claude-sonnet-5)
   max_tokens: 8192                  # max tokens per judge response
   http_max_retry_attempts: 5        # network-level retries before a judge call is treated as failed
   max_workers: 4                     # max concurrent judge calls, capped to stay under the API's requests-per-minute limit
   truncation_margin_tokens: 16       # how close a response's length must be to its role's max_response_length before it's flagged as possibly truncated
   low_quality_threshold: 2.0          # raw judge score (1-10 scale) at or below which a group of samples is too uniformly bad to rank meaningfully — the group gets a neutral reward instead
-  critic_url: null                    # base URL of the deployed vLLM sft-critic server (modal_app.py::critic_judge_server) — required when judge.type=sft-critic, checked at config-load/startup time
+  critic_url: https://columbia-daplab--r-zero-creative-critic-judge-server.modal.run                    # base URL of the deployed vLLM sft-critic server (modal_app.py::critic_judge_server) — required when judge.type=sft-critic, checked at config-load/startup time
   critic_model: writingbench-critic-qwen-7b  # --served-model-name the sft-critic server was launched with
 
 # ---------------------------------------------------------------------------
@@ -196,7 +197,7 @@ verl:
     experiment_name: null                        # W&B run name / checkpoint directory name for this run — set by the run launcher
     logger: ["console", "wandb"]                  # where training metrics are logged
     nnodes: 1                                       # number of machines used for training
-    n_gpus_per_node: 4                               # GPUs dedicated to the training process; the remaining GPUs on the node are reserved for the frozen judge/solver oracle
+    n_gpus_per_node: 1                               # GPUs dedicated to the training process; the remaining GPUs on the node are reserved for the frozen judge/solver oracle
     val_freq: -1                                      # steps between validation passes — -1 disables periodic validation
     val_before_train: true                              # run one validation pass before training starts (moot while val_freq is -1)
     val_only: false                                       # skip training and only run validation

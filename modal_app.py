@@ -256,6 +256,7 @@ def train_solver(config: str, overrides: list[str] = [], run_ts: str = "",
     gpu=CRITIC_JUDGE_GPU,
     secrets=[runtime_secret],       # HF_TOKEN, in case CRITIC_MODEL_ID ever becomes gated/private
     min_containers=0,               # scale to zero between runs — no GPU billed while idle
+    max_containers=4,               # only one instance of the judge service is needed (TODO(dayanc): scale this when full run)
     scaledown_window=CRITIC_JUDGE_SCALEDOWN_WINDOW_S,
     timeout=86400,
 )
@@ -293,6 +294,46 @@ def critic_judge_server():
         "--disable-log-requests",
     ])
 
+
+
+@app.function(
+    image=image,
+    volumes={REMOTE_STORAGE_PATH: volume},
+    secrets=[runtime_secret],
+    timeout=TIMEOUT_S,
+    retries=RETRIES,
+    env={"PYTHONUNBUFFERED": "1"},
+)
+def run_challenger_only(config: str, overrides: list[str] = [], iteration: int = 1) -> str:
+    """Run only Phase A (challenger) training, for debugging or small runs."""
+    storage = _container_setup()
+    from creative_rzero import orchestrator
+    from creative_rzero.config import load
+    from creative_rzero.paths import RunPaths
+
+    def _phase_overrides(iter_cfg) -> list[str]:
+            """Serialize the per-iteration state (current checkpoint paths) back
+            into dotlist overrides so only primitives cross the .remote() boundary;
+            the GPU function re-loads the same config from them."""
+            return list(overrides) + [
+                f"challenger.model_path={iter_cfg.challenger.model_path}",
+                f"solver.model_path={iter_cfg.solver.model_path}",
+            ]
+    
+    cfg = load(config, cli_args=list(overrides))
+    ckpt = orchestrator.run_challenger_only(
+        cfg, 
+        storage,
+        train_challenger_fn=lambda c, ts, i: train_challenger.remote(
+            config, _phase_overrides(c), ts, i,
+            wandb_group=os.environ.get("WANDB_RUN_GROUP", ""),
+        ),
+        commit_fn=volume.commit,
+        reload_fn=volume.reload,
+    )
+    volume.commit()
+    print(f"=== Challenger training complete — checkpoint: {ckpt} ===")
+    return ckpt
 
 @app.function(
     image=image,
@@ -407,6 +448,16 @@ def preflight_check(config: str = "configs/exp/validation_tiny.yaml", set: str =
     """Run the CPU wiring check: modal run modal_app.py::preflight_check"""
     overrides = [s.strip() for s in set.split(",") if s.strip()]
     print(preflight.remote(config, overrides))
+
+
+@app.local_entrypoint()
+def challenger_only(config: str = "configs/exp/validation_tiny.yaml"):
+    """Run just Phase A (challenger) training, for debugging or small runs:
+    modal run --detach modal_app.py::challenger_only --config ...
+    """
+    fc = run_challenger_only.spawn(config, [])
+    print(f"=== Challenger-only run submitted (function call: {fc.object_id}) ===")
+    print(f"    modal app logs {APP_NAME}   # to follow")
 
 
 @app.local_entrypoint()

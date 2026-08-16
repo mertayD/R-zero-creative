@@ -1,0 +1,48 @@
+# A/B pair with solver_reward_rank.yaml — see that file for the full
+# rationale (num_iters: 1, why judge.type must be claude, etc). This file
+# must stay identical to solver_reward_rank.yaml except run.abbr and
+# rewards.solver.type.
+run:
+  abbr: rankraw-b-raw
+  profile: smoke
+  seed: 42
+  num_iters: 1
+  experiment: solver-reward-test
+
+challenger:
+  model_path: Qwen/Qwen3-0.6B
+  max_steps: 2
+  rollout_n: 2
+  num_train: 2
+  num_val: 1
+  max_response_length: 2048
+
+solver:
+  model_path: Qwen/Qwen3-0.6B
+  max_steps: 2
+  rollout_n: 2
+  num_train: 2
+  num_val: 1
+  max_response_length: 3072
+
+judge:
+  type: sft-critic                      # random scores, no Perplexity/Claude call — this run is wiring validation, not judge quality
+  critic_url: https://columbia-daplab--r-zero-creative-critic-judge-server.modal.run
+  critic_model: writingbench-critic-qwen-7b
+  max_workers: 2                  # only ~4 concurrent samples exist at this size
+
+rewards:
+  solver:
+    type: raw                 # <-- the only reward-formula knob; "rank" in the paired -rank.yaml
+
+verl:
+  data:
+    apply_chat_template_kwargs:
+      enable_thinking: false
+  worker:
+    rollout:
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.6
+  trainer:
+    n_gpus_per_node: 1
+    logger: ["console", "wandb"]
