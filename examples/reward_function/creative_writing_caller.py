@@ -370,6 +370,14 @@ def compute_score(
     """
     agent = _get_agent()
 
+    # Rollouts generated under a forced assistant prefix (data.response_prefill)
+    # arrive without it — reattach so validation and logging see the complete
+    # document. Fence parity is preserved for the truncation heuristic: the
+    # prefill's opening ``` pairs with the model's closing fence.
+    prefill = os.environ.get("CHALLENGER_PREFILL", "")
+    if prefill:
+        predicts = [prefill + p for p in predicts]
+
     # ground_truth metadata is a logging channel; tolerate legacy parquets
     # where answer is "" (or anything unparseable) rather than crash a run.
     metadata: List[dict] = []

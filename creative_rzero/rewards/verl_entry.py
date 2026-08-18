@@ -77,6 +77,13 @@ def _load_experiment_config():
     return OmegaConf.load(cfg_path)
 
 
+def _challenger_prefill(cfg) -> str:
+    if not getattr(cfg.challenger, "prefill", False):
+        return ""
+    from creative_rzero.utils import CHALLENGER_PREFILL
+    return CHALLENGER_PREFILL
+
+
 def _bridge_config_to_env(cfg) -> None:
     """Project resolved-config values into the env names the legacy reward
     callers and judge client read at import time. Direct assignment, not
@@ -102,6 +109,9 @@ def _bridge_config_to_env(cfg) -> None:
         "CHALLENGER_MAX_RESPONSE_LENGTH": cfg.challenger.max_response_length,
         "CREATIVE_SOLVER_PORT": cfg.challenger.solver_query.port,
         "CREATIVE_SOLVER_MAX_TOKENS": cfg.challenger.solver_query.max_tokens,
+        # the forced assistant prefix rollouts were generated under ("" = off);
+        # the caller prepends it so validation sees the complete document
+        "CHALLENGER_PREFILL": _challenger_prefill(cfg),
     }
     os.environ.update({k: str(v) for k, v in bridge.items()})
 
