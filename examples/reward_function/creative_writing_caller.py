@@ -370,10 +370,8 @@ def compute_score(
     """
     agent = _get_agent()
 
-    # Rollouts generated under a forced assistant prefix (data.response_prefill)
-    # arrive without it — reattach so validation and logging see the complete
-    # document. Fence parity is preserved for the truncation heuristic: the
-    # prefill's opening ``` pairs with the model's closing fence.
+    # Rollouts generated under a forced assistant prefix arrive without it;
+    # reattach so validation and logging see the complete document.
     prefill = os.environ.get("CHALLENGER_PREFILL", "")
     if prefill:
         predicts = [prefill + p for p in predicts]
@@ -401,6 +399,10 @@ def compute_score(
     format_reasons: List[str] = [FormatFailureReason.OK.value] * len(predicts)
     for i, predict in enumerate(predicts):
         thinking, answer = split_thinking(predict)
+        if prefill and not answer.startswith(prefill):
+            # a stray </think> in the rollout swallowed the prefill into the
+            # thinking segment; put it back so the answer parses
+            answer = prefill + answer
         challenger_thinking.append(thinking)
         fmt, p, fmt_reason = FormatValidator.validate_response(answer)
         if fmt != 1:

@@ -244,7 +244,7 @@ class RLHFDataset(Dataset):
             )
         else:
             return (
-                len("system: " + messages[0]["content"] + '\n' + "user: " + messages[1]["content"]) <= self.max_prompt_length
+                len("system: " + messages[0]["content"] + '\n' + "user: " + messages[1]["content"]) + len(self.response_prefill) <= self.max_prompt_length
             )
         
 
@@ -257,6 +257,7 @@ class RLHFDataset(Dataset):
 
         if self.image_key in example:
             prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, **self._safe_chat_template_kwargs())
+            prompt += self.response_prefill
             raw_image_data = example.pop(self.image_key)
             images = [
                 process_image(image, min_pixels=self.min_pixels, max_pixels=self.max_pixels)
