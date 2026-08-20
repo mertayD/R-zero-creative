@@ -71,6 +71,10 @@ class ChallengerConfig:
     num_train: int = 8
     num_val: int = 2
     max_response_length: int = 4096
+    # Start rollouts inside a forced "```json\n{" assistant prefix
+    # (utils.CHALLENGER_PREFILL) — validated on Qwen3-4B-Base: format-valid
+    # rollouts 42.5% -> 77.5% together with rollout min_p 0.05.
+    prefill: bool = True
     solver_query: SolverQueryConfig = field(default_factory=SolverQueryConfig)
 
 
