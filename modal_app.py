@@ -65,6 +65,14 @@ CRITIC_SERVED_NAME           = os.getenv("CRITIC_SERVED_NAME", "writingbench-cri
 CRITIC_JUDGE_GPU             = os.getenv("CRITIC_JUDGE_GPU", "L4")
 CRITIC_JUDGE_SCALEDOWN_WINDOW_S = int(os.getenv("CRITIC_JUDGE_SCALEDOWN_WINDOW_S", "3600"))
 
+# creative_rzero/eval/challenger — standalone challenger eval harness. One
+# GPU is enough (vLLM inference only, no training), so this gets its own
+# smaller/cheaper GPU spec rather than reusing GPU_SPEC (sized for training +
+# an aux GPU). Timeout default matches modal_run.py's MODAL_EVAL_TIMEOUT_SECONDS.
+CHALLENGER_EVAL_GPU          = os.getenv("CHALLENGER_EVAL_GPU", "A100-40GB:1")
+CHALLENGER_EVAL_TIMEOUT_S    = int(os.getenv("CHALLENGER_EVAL_TIMEOUT_SECONDS", "10800"))  # 3h
+CHALLENGER_EVAL_DATASET_REPO = os.getenv("CHALLENGER_EVAL_DATASET_REPO", "challenger-eval-v1")
+
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 # Same image as modal_run.py (kept in lockstep until that file is deleted
@@ -246,6 +254,63 @@ def train_solver(config: str, overrides: list[str] = [], run_ts: str = "",
     volume.commit()
     print(f"=== Solver training complete — checkpoint: {ckpt} ===")
     return ckpt
+
+
+@app.function(
+    image=image,  # already has vllm/scikit-learn/datasets/wandb — everything
+                  # creative_rzero/eval/challenger needs, no separate build
+    gpu=CHALLENGER_EVAL_GPU,
+    volumes={REMOTE_STORAGE_PATH: volume},
+    secrets=[runtime_secret],
+    timeout=CHALLENGER_EVAL_TIMEOUT_S,
+    env=GPU_RUNTIME_ENV,
+)
+def run_challenger_eval(
+    checkpoint: str,
+    dataset_repo: str = "",
+    judge_type: str = "claude",
+    limit: int | None = None,
+    step: int | None = None,
+    wandb_group: str = "",
+    out_path: str = "",
+) -> str:
+    """Run creative_rzero/eval/challenger's standalone harness (build_dataset.py's
+    frozen eval set -> generate -> judge -> aggregate) against `checkpoint`
+    and return the aggregate summary as a JSON string.
+
+    Synchronous: call with `.remote()` (as `challenger_eval` below does), not
+    `.spawn()` — the whole point is triggering an eval and getting results
+    back in the same invocation instead of polling a separate function call.
+
+    `checkpoint` is any vLLM-loadable model — a merged HF checkpoint dir on
+    the volume (e.g. `paths.merged_checkpoint("challenger", step)`) or a bare
+    HF model id. `dataset_repo` defaults to `HUGGINGFACENAME/{CHALLENGER_EVAL_DATASET_REPO}`,
+    the set `build_dataset.py` pushes to Phase 1. `wandb_group` defaults to
+    "challenger-eval" (rather than empty) so W&B logging is on by default —
+    `_container_setup` only sets WANDB_MODE=online when a group is given.
+    """
+    import json as _json
+
+    storage = _container_setup(wandb_group or "challenger-eval")
+    from creative_rzero.eval.challenger.run_eval import run as run_harness
+
+    repo = dataset_repo or f"{HUGGINGFACENAME}/{CHALLENGER_EVAL_DATASET_REPO}"
+    resolved_out = out_path or (
+        f"{storage}/eval/challenger/results/{checkpoint.strip('/').replace('/', '_')}.jsonl"
+    )
+
+    summary = run_harness(
+        model=checkpoint,
+        out_path=resolved_out,
+        dataset_repo=repo,
+        judge_type=judge_type,
+        limit=limit,
+        step=step,
+        wandb_group=wandb_group,
+    )
+    volume.commit()
+    print(f"=== Challenger eval complete — results: {resolved_out} ===")
+    return _json.dumps(summary, indent=2)
 
 
 @app.function(
@@ -458,6 +523,35 @@ def challenger_only(config: str = "configs/exp/validation_tiny.yaml"):
     fc = run_challenger_only.spawn(config, [])
     print(f"=== Challenger-only run submitted (function call: {fc.object_id}) ===")
     print(f"    modal app logs {APP_NAME}   # to follow")
+
+
+@app.local_entrypoint()
+def challenger_eval(
+    checkpoint: str,
+    dataset_repo: str = "",
+    judge_type: str = "claude",
+    limit: int = 0,
+    step: int = 0,
+):
+    """Trigger a challenger eval and block until it's done, printing the
+    aggregate summary — one command, immediate results, no separate polling
+    step:
+
+        modal run modal_app.py::challenger_eval --checkpoint /storage/models/<run>/global_step_120/actor/huggingface
+
+    `--limit`/`--step` are CLI-friendly `int`s (0 = unset) since Modal's CLI
+    arg parser doesn't take `Optional[int]`; both convert to `None` before
+    reaching run_challenger_eval, which does take `int | None`.
+    """
+    summary_json = run_challenger_eval.remote(
+        checkpoint,
+        dataset_repo=dataset_repo,
+        judge_type=judge_type,
+        limit=limit or None,
+        step=step or None,
+        wandb_group=os.environ.get("WANDB_RUN_GROUP", ""),
+    )
+    print(summary_json)
 
 
 @app.local_entrypoint()

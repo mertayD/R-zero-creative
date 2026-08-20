@@ -3,17 +3,31 @@ ClaudeAgent — official WritingBench LLM-as-judge path.
 
 Adapted from upstream evaluator/llm.py (Apache-2.0). Upstream's stub left api_key,
 url, and model blank for the user to fill in against an OpenAI-compatible
-endpoint. We rewrite the body to call Claude-Sonnet-4-5 through the Perplexity
-Gateway's Anthropic-Messages-compatible endpoint, which is the judge the
-WritingBench leaderboard switched to on 2025-11-27. Public scores on the
-leaderboard are produced this way, so this keeps our results directly
-comparable.
+endpoint. We call Claude through Perplexity's **Agent API**
+(`https://api.perplexity.ai/v1/agent`), which is the judge the WritingBench
+leaderboard switched to on 2025-11-27. Public scores on the leaderboard are
+produced this way, so this keeps our results directly comparable.
+
+This is deliberately NOT Perplexity's Router API
+(`https://api.perplexity.ai/router/v1/messages`), despite that one accepting
+an Anthropic-Messages-shaped request/model id that looks like a closer match
+— confirmed live (2026-08-19) that the Router API 403s with `"The Router API
+is currently in limited preview. Contact api@perplexity.ai to request
+access"` on this account, while the Agent API's `anthropic/<model>` routing
+works today with no special access. The Agent API's request/response shape
+is OpenAI-Responses-API-style, not Anthropic-Messages-style: `input` (not
+`messages`), `instructions` (not a `system` message), `max_output_tokens`
+(not `max_tokens`), and a response body shaped
+`output: [{"type": "message", "content": [{"type": "output_text", "text":
+...}]}]` (not a top-level `content` array). `call_claude` below still takes
+the familiar `messages` list — kept for a stable interface across this
+rewrite — and translates it into that shape internally.
 
 Sampling parameters are kept close to upstream (temperature=1.0); max_length
 is now a configurable default rather than a fixed 2048 — see WB_JUDGE_MAX_TOKENS.
 
 Configuration:
-    PERPLEXITY_API_KEY            required, your Perplexity Gateway key
+    PERPLEXITY_API_KEY            required, your Perplexity Agent API key
     WB_JUDGE_MODEL                 optional, default 'claude-sonnet-4-5'
     WB_JUDGE_MAX_TOKENS            optional, default 8192
     JUDGE_MAX_HTTP_RETRY_ATTEMPTS  optional, default 5
@@ -30,8 +44,7 @@ load_dotenv()
 
 # Default model id matches the one currently used by the WritingBench leaderboard.
 DEFAULT_JUDGE_MODEL = os.environ.get("WB_JUDGE_MODEL", "claude-sonnet-5")
-PERPLEXITY_GATEWAY_URL = "https://api.perplexity.ai/router/v1/messages"
-ANTHROPIC_API_VERSION = "2023-06-01"
+PERPLEXITY_AGENT_URL = "https://api.perplexity.ai/v1/agent"
 
 # Judge sampling/response budget. This is a stopgap env-var knob, not the
 # real config system — Phase 2 (creative_rzero/config.py) is where this and
@@ -69,7 +82,7 @@ class ClaudeAgent(object):
         self.system_prompt = system_prompt
         self.api_key = os.environ.get("PERPLEXITY_API_KEY", "")
         self.model = f"anthropic/{DEFAULT_JUDGE_MODEL}"
-        self.url = PERPLEXITY_GATEWAY_URL
+        self.url = PERPLEXITY_AGENT_URL
         if not self.api_key:
             raise RuntimeError(
                 "PERPLEXITY_API_KEY is not set. Export it before running the "
@@ -80,34 +93,42 @@ class ClaudeAgent(object):
                     messages,
                     temperature: float = 1.0,
                     max_length: int = DEFAULT_JUDGE_MAX_TOKENS):
-        # Anthropic's Messages API takes `system` as a top-level field, not a
-        # role inside `messages`. Strip a leading system message if present and
-        # promote it to the top-level field.
+        # The Agent API has no `system` role — a leading system message
+        # becomes the top-level `instructions` field instead. Every caller in
+        # this repo (ClaudeAgent.run, below) sends exactly one system + one
+        # user message, so the common case is `input` = that one user
+        # message's bare content string; the multi-message branch below only
+        # exists so a future multi-turn caller degrades gracefully instead of
+        # silently dropping messages.
         system = self.system_prompt
-        msgs = []
+        rest = []
         for m in messages:
             if m["role"] == "system":
                 system = m["content"]
             else:
-                msgs.append({"role": m["role"], "content": m["content"]})
+                rest.append(m)
+
+        if len(rest) == 1:
+            input_text = rest[0]["content"]
+        else:
+            input_text = "\n\n".join(f"{m['role']}: {m['content']}" for m in rest)
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "anthropic-version": ANTHROPIC_API_VERSION,
             "content-type": "application/json",
         }
-        # The gateway's Anthropic-Messages-compatible endpoint rejects requests
-        # that specify both `temperature` and `top_p`. Upstream WritingBench's
-        # evaluator/llm.py sends both because it was written against an
-        # OpenAI-compatible endpoint where that's allowed; here we send neither
-        # — temperature=1.0 is Anthropic's default, so omitting it is a no-op.
+        # temperature/top_p are deliberately not sent — temperature=1.0 is
+        # already Anthropic's default via this route, so omitting it is a
+        # no-op, and it keeps parity with the Router-API code path this
+        # replaced (which omitted both for the same reason against a
+        # different, Anthropic-Messages-shaped endpoint).
         data = {
             "model": self.model,
-            "max_tokens": int(max_length),
-            "messages": msgs,
+            "max_output_tokens": int(max_length),
+            "input": input_text,
         }
         if system:
-            data["system"] = system
+            data["instructions"] = system
 
         attempt = 0
         wait_time = 1
@@ -118,10 +139,20 @@ class ClaudeAgent(object):
                 response = requests.post(self.url, headers=headers, json=data, timeout=120)
                 if response.status_code == 200:
                     body = response.json()
-                    # Anthropic returns: {"content":[{"type":"text","text":"..."}, ...], ...}
-                    parts = body.get("content", [])
-                    text = "".join(p.get("text", "") for p in parts if p.get("type") == "text")
-                    return text
+                    # Agent API returns an OpenAI-Responses-API-shaped body:
+                    # {"output": [{"type": "message", "content": [{"type":
+                    # "output_text", "text": "..."}, ...]}, ...], ...} — collect
+                    # every output_text part across every message item, in
+                    # order, the same "concatenate all text parts" contract
+                    # the old Anthropic-Messages parsing had.
+                    parts = []
+                    for item in body.get("output", []):
+                        if item.get("type") != "message":
+                            continue
+                        for c in item.get("content", []):
+                            if c.get("type") == "output_text":
+                                parts.append(c.get("text", ""))
+                    return "".join(parts)
                 else:
                     last_status_code = response.status_code
                     print(f"Attempt {attempt+1}: HTTP {response.status_code}: {response.text[:300]}")
@@ -133,7 +164,7 @@ class ClaudeAgent(object):
             attempt += 1
 
         raise JudgeAPIError(
-            "Max attempts exceeded. Failed to get a successful response from the Perplexity Gateway.",
+            "Max attempts exceeded. Failed to get a successful response from the Perplexity Agent API.",
             status_code=last_status_code,
         )
 
