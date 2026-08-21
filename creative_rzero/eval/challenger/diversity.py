@@ -10,9 +10,20 @@ having been built from different guidance, is the actual mode-collapse
 signal this harness is meant to catch.
 
 Uses TF-IDF + cosine similarity (both already repo dependencies via
-scikit-learn) rather than an embedding model — cheap, dependency-free beyond
-what's already vendored, and sufficient to catch near-verbatim collapse,
-which is the failure mode of interest here (not subtle paraphrase detection).
+scikit-learn) rather than an embedding model — cheap and dependency-free
+beyond what's already vendored.
+
+Settings calibrated against blind human-protocol judgment (2026-08-20):
+1,243 within-subdomain pairs from a Qwen3-4B-Base eval run were scored 0-1
+for sameness by readers blinded to all similarity values, then vectorizer
+configs and thresholds were searched against those scores. Word unigrams
+with English stopwords removed at threshold 0.32 gave the best F1 (0.62,
+precision 0.51 / recall 0.78) for detecting true near-duplicates (blind
+sameness >= 0.7, i.e. same task AND same topic); the original
+no-stopword vectorizer at 0.85 flagged nothing on the same data (rank
+correlation with blind judgment 0.22 vs 0.52 calibrated). Lexical methods
+top out around Spearman ~0.5 on this task — an embedding-based similarity
+is the known upgrade path if higher fidelity is needed.
 """
 
 from __future__ import annotations
@@ -20,7 +31,7 @@ from __future__ import annotations
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-DEFAULT_SIMILARITY_THRESHOLD = 0.85
+DEFAULT_SIMILARITY_THRESHOLD = 0.32
 
 
 def near_duplicate_pairs(
@@ -33,7 +44,7 @@ def near_duplicate_pairs(
     if len(queries) < 2:
         return []
     try:
-        vectors = TfidfVectorizer().fit_transform(queries)
+        vectors = TfidfVectorizer(stop_words="english").fit_transform(queries)
     except ValueError:
         return []
     sims = cosine_similarity(vectors)
