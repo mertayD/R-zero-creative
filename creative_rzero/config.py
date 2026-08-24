@@ -117,6 +117,9 @@ class ChallengerPenaltyConfig:
     tau_mean: float = 0.2         # paper's 0.25, mapped to the Qwen sim scale
     cluster_threshold: float = 0.72  # eval detector's blind-calibrated duplicate bar
     embed_model: str = "Qwen/Qwen3-Embedding-4B"
+    # "phase" = paper's Eq. 6 (bank frozen during a phase, folded in after);
+    # "step"  = bank grows every step, so PMAP also sees within-phase history
+    memory_update: str = "phase"
 
 
 @dataclass

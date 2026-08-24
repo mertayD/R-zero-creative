@@ -136,6 +136,17 @@ def compute_penalties(queries: list[str], batch_total: int) -> list[dict]:
         pmap = lam * max(0.0, p_max - tau_max) + (1 - lam) * max(0.0, p_mean - tau_mean)
         out.append({"prep": prep, "p_max": p_max, "p_mean": p_mean, "pmap": pmap,
                     "penalty": alpha * prep + beta * pmap})
+
+    if os.environ.get("CHALLENGER_PENALTY_MEMORY_UPDATE", "phase") == "step":
+        # per-step memory: this batch's queries join M immediately, closing
+        # the within-phase cross-step blind window (deviation from the
+        # paper's end-of-iteration update, Eq. 6)
+        global _memory
+        _memory = emb if M is None or not len(M) else np.vstack([M, emb])
+        path = memory_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        np.savez(path, emb=_memory)
+        print(f"[rdiverse] memory +{n} (per-step) -> {_memory.shape[0]}", flush=True)
     return out
 
 

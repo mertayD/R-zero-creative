@@ -328,9 +328,10 @@ def run_challenger_phase(cfg: ExperimentConfig, paths: RunPaths) -> str:
     # Report before merging: merge raises on a missing/collapsed checkpoint,
     # and the rollout tables are exactly what you need to debug that failure.
     report_phase(paths, "challenger", max_steps=cfg.challenger.max_steps)
-    if cfg.rewards.penalty.enabled:
+    if cfg.rewards.penalty.enabled and cfg.rewards.penalty.memory_update == "phase":
         # fold this phase's valid queries into the memory bank so the NEXT
-        # challenger phase's PMAP sees them (rewards/rdiverse_penalty.py)
+        # challenger phase's PMAP sees them (rewards/rdiverse_penalty.py);
+        # in "step" mode the reward caller already appended them per step
         from creative_rzero.steps.memory_bank import update_memory_from_phase
         update_memory_from_phase(paths.rollout_log("challenger"))
     merged = merge_checkpoint(paths, "challenger", max_steps=cfg.challenger.max_steps)
