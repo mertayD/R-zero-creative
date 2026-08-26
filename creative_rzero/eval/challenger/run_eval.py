@@ -14,7 +14,7 @@ Per-row output schema (one JSON object per line):
     query, query_len, criteria_len,
     domain_adherence, guidance_adherence, criteria_quality,
     judge_backend, judge_reasoning,
-    near_duplicate
+    near_duplicate, near_duplicate_of, near_duplicate_similarity
 Judge/diversity fields are None for format-invalid rows (nothing valid to
 judge or compare).
 
@@ -175,24 +175,36 @@ def score_rows(rows: list[dict], responses: list[str], agent, judge_retries: int
 
 
 def add_diversity(scored: list[dict]) -> None:
-    """Mutates `scored` in place, adding `near_duplicate` to every row.
+    """Mutates `scored` in place, adding `near_duplicate`, `near_duplicate_of`
+    (the eval_id of the closest flagged partner), and
+    `near_duplicate_similarity` (TF-IDF cosine to that partner — how strong
+    the match is, where values near the 0.32 threshold are borderline and
+    values toward 1.0 are verbatim-level) to every row.
     Grouped by (domain, subdomain) — see diversity.py's module docstring for
     why the comparison is per-group rather than across the whole run.
-    Format-invalid rows (no `query` to compare) get `near_duplicate = None`."""
+    Format-invalid rows (no `query` to compare) get None for all three."""
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in scored:
         r["near_duplicate"] = None
+        r["near_duplicate_of"] = None
+        r["near_duplicate_similarity"] = None
         if r["format_valid"]:
             groups[(r["domain"], r["subdomain"])].append(r)
 
     for group_rows in groups.values():
         queries = [r["query"] for r in group_rows]
-        flagged: set[int] = set()
-        for i, j, _sim in near_duplicate_pairs(queries):
-            flagged.add(i)
-            flagged.add(j)
+        closest: dict[int, tuple[float, int]] = {}
+        for i, j, sim in near_duplicate_pairs(queries):
+            if sim > closest.get(i, (-1.0, -1))[0]:
+                closest[i] = (sim, j)
+            if sim > closest.get(j, (-1.0, -1))[0]:
+                closest[j] = (sim, i)
         for idx, r in enumerate(group_rows):
-            r["near_duplicate"] = idx in flagged
+            r["near_duplicate"] = idx in closest
+            if idx in closest:
+                sim, partner = closest[idx]
+                r["near_duplicate_of"] = group_rows[partner]["eval_id"]
+                r["near_duplicate_similarity"] = round(sim, 3)
 
 
 def _wandb_active() -> bool:
@@ -238,14 +250,16 @@ def _rows_table(scored: list[dict]):
     columns = [
         "eval_id", "domain", "subdomain", "replicate_idx", "format_valid",
         "format_failure_reason", "domain_adherence", "guidance_adherence",
-        "criteria_quality", "judge_backend", "near_duplicate", "query_preview",
+        "criteria_quality", "judge_backend", "near_duplicate", "near_duplicate_of",
+        "near_duplicate_similarity", "query_preview",
     ]
     table = _wandb.Table(columns=columns)
     for r in scored:
         table.add_data(
             r["eval_id"], r["domain"], r["subdomain"], r["replicate_idx"], r["format_valid"],
             r["format_failure_reason"], r["domain_adherence"], r["guidance_adherence"],
-            r["criteria_quality"], r["judge_backend"], r["near_duplicate"], r["query"][:200],
+            r["criteria_quality"], r["judge_backend"], r["near_duplicate"],
+            r["near_duplicate_of"], r["near_duplicate_similarity"], r["query"][:200],
         )
     return table
 

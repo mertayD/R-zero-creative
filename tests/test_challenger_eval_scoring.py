@@ -188,6 +188,36 @@ def test_duplicate_rate_matches_flagged_fraction():
     assert duplicate_rate(queries) == pytest.approx(0.5)
 
 
+def test_add_diversity_records_partner_and_similarity():
+    from creative_rzero.eval.challenger.run_eval import add_diversity
+
+    def _r(eval_id, query, valid=True):
+        return {
+            "eval_id": eval_id, "domain": "D1", "subdomain": "short story",
+            "format_valid": valid, "query": query,
+        }
+
+    scored = [
+        _r("D1|short story|0", "Write a formal quarterly report for the finance team about Q3 revenue."),
+        _r("D1|short story|1", "Write a formal quarterly report for the finance team about Q3 revenue!"),
+        _r("D1|short story|2", "Compose a whimsical bedtime story about a dragon afraid of the dark."),
+        _r("D1|short story|3", "", valid=False),
+    ]
+    add_diversity(scored)
+
+    assert scored[0]["near_duplicate"] and scored[1]["near_duplicate"]
+    assert scored[0]["near_duplicate_of"] == "D1|short story|1"
+    assert scored[1]["near_duplicate_of"] == "D1|short story|0"
+    assert scored[0]["near_duplicate_similarity"] >= 0.32
+    assert scored[0]["near_duplicate_similarity"] == scored[1]["near_duplicate_similarity"]
+
+    assert scored[2]["near_duplicate"] is False
+    assert scored[2]["near_duplicate_of"] is None and scored[2]["near_duplicate_similarity"] is None
+
+    assert scored[3]["near_duplicate"] is None
+    assert scored[3]["near_duplicate_of"] is None and scored[3]["near_duplicate_similarity"] is None
+
+
 # =============================================================================
 # aggregate
 # =============================================================================
