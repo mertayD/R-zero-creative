@@ -82,6 +82,25 @@ def test_default_taus_are_qwen_mapped(monkeypatch):
     assert pens[0]["pmap"] == pytest.approx(0.415)
 
 
+def test_step_memory_mode_grows_bank_within_phase(monkeypatch, tmp_path):
+    """memory_update=step: a batch joins the bank immediately, so the next
+    batch in the same phase is penalized for repeating it."""
+    monkeypatch.setenv("CHALLENGER_PENALTY_MEMORY_UPDATE", "step")
+    monkeypatch.setenv("STORAGE_PATH", str(tmp_path))
+    monkeypatch.setenv("VERL_EXPERIMENT_NAME", "steptest_iter1_x")
+    monkeypatch.setattr(rdiverse_penalty, "embed", lambda qs: _one_hot(4, *([0] * len(qs))))
+    monkeypatch.setattr(rdiverse_penalty, "_memory", None)
+    monkeypatch.setattr(rdiverse_penalty, "_memory_loaded", False)
+
+    first = rdiverse_penalty.compute_penalties(["q1"], batch_total=1)
+    second = rdiverse_penalty.compute_penalties(["q1 again"], batch_total=1)
+
+    assert first[0]["pmap"] == 0.0          # bank was empty when batch 1 scored
+    assert second[0]["p_max"] == pytest.approx(1.0)  # batch 1 already in the bank
+    assert second[0]["pmap"] > 0.0
+    assert (tmp_path / "memory_bank" / "steptest.npz").exists()
+
+
 def test_memory_path_strips_iteration_suffix(monkeypatch):
     monkeypatch.setenv("VERL_EXPERIMENT_NAME", "dup-dynamics_iter2_challenger")
     monkeypatch.setenv("STORAGE_PATH", "/storage")

@@ -1,0 +1,55 @@
+# Step-wise variant of configs/exp/rdiverse_penalty.yaml — identical recipe,
+# except the penalty's memory bank grows EVERY training step instead of only
+# at the end of each challenger phase (rewards.penalty.memory_update: step).
+# This deviates from the paper's end-of-iteration update (Eq. 6): a query
+# generated at step 2 already raises PMAP for lookalikes at step 3, closing
+# the within-phase blind window the paper's schedule leaves open.
+#
+# In the seed-paired three-arm run this was the strongest arm: whole-run
+# duplication 22.5% vs 27.4% (phase-end penalty) vs 30.1% (no penalty), and
+# the only arm whose per-iteration duplication declined over training.
+run:
+  abbr: rdiv-step
+  num_iters: 3
+  experiment: rdiverse-penalty-stepmem
+
+challenger:
+  model_path: Qwen/Qwen3-4B-Base
+  max_steps: 4
+  rollout_n: 8
+  num_train: 4
+  num_val: 1
+  max_response_length: 2048
+  solver_query:
+    max_tokens: 4096
+
+solver:
+  model_path: Qwen/Qwen3-4B-Base
+  max_steps: 1
+  rollout_n: 4
+  num_train: 4
+  num_val: 1
+  max_response_length: 2048
+
+judge:
+  type: sft-critic
+  critic_url: https://columbia-daplab--r-zero-creative-critic-judge-server.modal.run
+  critic_model: writingbench-critic-qwen-7b
+  max_workers: 8
+
+rewards:
+  penalty:
+    enabled: true
+    memory_update: step         # the one deviation from rdiverse_penalty.yaml
+
+verl:
+  data:
+    apply_chat_template_kwargs:
+      enable_thinking: false
+  worker:
+    rollout:
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.6
+  trainer:
+    n_gpus_per_node: 1
+    logger: ["console", "wandb"]
