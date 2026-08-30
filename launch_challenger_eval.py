@@ -21,6 +21,7 @@ def launch(
     limit: int = 0,
     dataset_repo: str = "",
     critic_url: str = "",
+    out_path: str = "",
 ):
     import os
 
@@ -33,5 +34,6 @@ def launch(
         wandb_group=os.environ.get("WANDB_RUN_GROUP", ""),
         dup_method=dup_method,
         critic_url=critic_url,
+        out_path=out_path,
     )
     print(f"spawned challenger eval: function call {call.object_id}")
