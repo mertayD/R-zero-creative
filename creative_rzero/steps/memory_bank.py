@@ -26,8 +26,19 @@ def _extract_query(raw: str) -> str | None:
     return q.strip() if isinstance(q, str) and q.strip() else None
 
 
+def _bank_size() -> int:
+    import os
+
+    import numpy as np
+    from creative_rzero.rewards import rdiverse_penalty
+
+    path = rdiverse_penalty.memory_path()
+    return int(np.load(path)["emb"].shape[0]) if os.path.exists(path) else 0
+
+
 def update_memory_from_phase(reward_log_path) -> int:
-    """Returns the bank's new size (0 if the log is missing/empty)."""
+    """Returns the bank's size after this phase's valid queries are folded
+    in — unchanged (possibly non-zero) if the log is missing or has none."""
     from creative_rzero.rewards import rdiverse_penalty
 
     queries = []
@@ -44,10 +55,10 @@ def update_memory_from_phase(reward_log_path) -> int:
                         queries.append(q)
     except FileNotFoundError:
         print(f"[memory_bank] no reward log at {reward_log_path} — nothing to add", flush=True)
-        return 0
+        return _bank_size()
     if not queries:
         print("[memory_bank] no valid queries in phase log — nothing to add", flush=True)
-        return 0
+        return _bank_size()
     size = rdiverse_penalty.append_memory(queries)
     print(f"[memory_bank] +{len(queries)} queries -> bank size {size}", flush=True)
     return size
