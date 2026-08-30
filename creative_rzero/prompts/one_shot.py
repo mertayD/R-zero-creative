@@ -79,7 +79,11 @@ Every criterion must:
 - Be fulfillable in plain text (no fonts, colors, LaTeX rendering) and never
   reward invented citations, statistics, or sources.
 - Have bands that describe OBSERVABLY different responses, so two readers
-  could agree which band a response falls in.
+  could agree which band a response falls in. This applies to EVERY band:
+  the middle bands (3-4, 5-6, 7-8) must each name what a response at that
+  level concretely gets right and wrong about THIS task. Reusable ladder
+  wording ("adequate", "competent execution", "exceptional performance")
+  is a failure even in one band.
 
 EXAMPLES - for an unrelated task ("Write a 300-word product description for a
 mechanical keyboard aimed at first-time buyers"):
@@ -103,6 +107,19 @@ BAD criterion (do NOT produce these):
     -> grades the prompt, not the response.
   9-10: "Cites at least 5 peer-reviewed sources"
     -> the query never asked for sources; rewards fabrication.
+
+The example above is illustrative ONLY: never reuse its topic, product, or
+wording in your own query or criteria.
+
+FINAL SELF-CHECK before you output the JSON:
+1. Re-read each refinement principle from the guidance list. Every one of
+   them must appear concretely in the query itself (a stated length, a named
+   audience, a required format, a personalization hook...), not merely be
+   implied. Revise the query until each principle is visibly there.
+2. Every explicit requirement in your query must be tested by at least one
+   criterion, and no criterion may test anything the query does not state.
+3. Scan every score band for reusable ladder wording; rewrite any band that
+   could be pasted under a different task unchanged.
 
 STEP 4: IDENTIFY REQUIREMENTS
 Look for and identify any:
