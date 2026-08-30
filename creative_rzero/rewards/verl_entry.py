@@ -102,6 +102,16 @@ def _bridge_config_to_env(cfg) -> None:
         "CHALLENGER_MAX_RESPONSE_LENGTH": cfg.challenger.max_response_length,
         "CREATIVE_SOLVER_PORT": cfg.challenger.solver_query.port,
         "CREATIVE_SOLVER_MAX_TOKENS": cfg.challenger.solver_query.max_tokens,
+        # R-Diverse penalties (rewards/rdiverse_penalty.py)
+        "CHALLENGER_PENALTY_ENABLED": "1" if cfg.rewards.penalty.enabled else "0",
+        "CHALLENGER_PENALTY_ALPHA": cfg.rewards.penalty.alpha,
+        "CHALLENGER_PENALTY_BETA": cfg.rewards.penalty.beta,
+        "CHALLENGER_PENALTY_LAMBDA": cfg.rewards.penalty.lam,
+        "CHALLENGER_PENALTY_TAU_MAX": cfg.rewards.penalty.tau_max,
+        "CHALLENGER_PENALTY_TAU_MEAN": cfg.rewards.penalty.tau_mean,
+        "CHALLENGER_PENALTY_CLUSTER_T": cfg.rewards.penalty.cluster_threshold,
+        "CHALLENGER_PENALTY_EMBED_MODEL": cfg.rewards.penalty.embed_model,
+        "CHALLENGER_PENALTY_MEMORY_UPDATE": cfg.rewards.penalty.memory_update,
     }
     os.environ.update({k: str(v) for k, v in bridge.items()})
 

@@ -206,6 +206,10 @@ def _log_challenger_rollouts(
             "overall":              round(scores[idx].get("overall", 0.0), 4),
             "format":               round(scores[idx].get("format",  0.0), 4),
             "accuracy":             round(scores[idx].get("accuracy", 0.0), 4),
+            "prep_penalty":         scores[idx].get("prep_penalty", 0.0),
+            "pmap_penalty":         scores[idx].get("pmap_penalty", 0.0),
+            "p_max":                scores[idx].get("p_max", 0.0),
+            "p_mean":               scores[idx].get("p_mean", 0.0),
             "failure_reason":       failure_reasons[idx],
         }
         entries.append(json.dumps(entry))
@@ -466,6 +470,28 @@ def compute_score(
                 idx = futures[future]
                 scores[idx], failure_reasons[idx] = future.result()
 
+    # --- R-Diverse penalties (rewards/rdiverse_penalty.py): subtract batch
+    # repetition + memory-bank similarity from valid rollouts' rewards ---
+    try:
+        from creative_rzero.rewards import rdiverse_penalty
+        if rdiverse_penalty.enabled():
+            pen_idx = [i for i in valid_idx if parsed[i] is not None and parsed[i].query]
+            pens = rdiverse_penalty.compute_penalties(
+                [parsed[i].query for i in pen_idx], batch_total=len(predicts))
+            for i, p in zip(pen_idx, pens):
+                scores[i]["overall"] = scores[i]["overall"] - p["penalty"]
+                scores[i].update({"prep_penalty": round(p["prep"], 4),
+                                  "pmap_penalty": round(p["pmap"], 4),
+                                  "p_max": round(p["p_max"], 4),
+                                  "p_mean": round(p["p_mean"], 4)})
+            if pens:
+                print(f"[rdiverse] step {_challenger_step}: mean prep "
+                      f"{sum(p['prep'] for p in pens)/len(pens):.3f}, mean pmap "
+                      f"{sum(p['pmap'] for p in pens)/len(pens):.3f} over {len(pens)} valid",
+                      flush=True)
+    except Exception as _pen_err:
+        print(f"[creative_writing_caller] rdiverse penalty failed: {_pen_err}", flush=True)
+
     try:
         _log_challenger_rollouts(
             predicts, metadata, parsed, challenger_thinking,
@@ -495,6 +521,11 @@ def compute_score(
                 "challenger/num_valid":           n_valid,
                 "challenger/num_samples":         n_total,
             }
+            pen_prep = [s["prep_penalty"] for s in valid_scores if "prep_penalty" in s]
+            if pen_prep:
+                log_dict["challenger/mean_prep_penalty"] = mean(pen_prep)
+                log_dict["challenger/mean_pmap_penalty"] = mean(
+                    s.get("pmap_penalty", 0.0) for s in valid_scores)
             reason_counts: Dict[str, int] = {}
             for reason in failure_reasons:
                 reason_counts[reason] = reason_counts.get(reason, 0) + 1

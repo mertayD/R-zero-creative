@@ -103,9 +103,30 @@ class RewardSelector:
 
 
 @dataclass
+class ChallengerPenaltyConfig:
+    """R-Diverse penalties (arXiv:2602.13103) for the challenger reward —
+    see rewards/rdiverse_penalty.py. phi is a text embedder (no SAM code
+    pipeline): the same Qwen3-Embedding-4B the eval duplicate detector uses,
+    with the paper's hinge tolerances quantile-mapped into its similarity
+    scale (provenance in the module docstring)."""
+    enabled: bool = False
+    alpha: float = 1.0            # weight of Prep (within-batch cluster share)
+    beta: float = 1.0             # weight of PMAP (memory-bank similarity)
+    lam: float = 0.5              # PMAP mix of max- vs mean-similarity terms
+    tau_max: float = 0.47         # paper's 0.5, mapped to the Qwen sim scale
+    tau_mean: float = 0.2         # paper's 0.25, mapped to the Qwen sim scale
+    cluster_threshold: float = 0.72  # eval detector's blind-calibrated duplicate bar
+    embed_model: str = "Qwen/Qwen3-Embedding-4B"
+    # "phase" = paper's Eq. 6 (bank frozen during a phase, folded in after);
+    # "step"  = bank grows every step, so PMAP also sees within-phase history
+    memory_update: str = "phase"
+
+
+@dataclass
 class RewardsConfig:
     solver: RewardSelector = field(default_factory=lambda: RewardSelector(type="rank"))
     challenger: RewardSelector = field(default_factory=lambda: RewardSelector(type="uncertainty"))
+    penalty: ChallengerPenaltyConfig = field(default_factory=ChallengerPenaltyConfig)
 
 
 @dataclass
