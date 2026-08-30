@@ -83,7 +83,10 @@ Every criterion must:
   the middle bands (3-4, 5-6, 7-8) must each name what a response at that
   level concretely gets right and wrong about THIS task. Reusable ladder
   wording ("adequate", "competent execution", "exceptional performance")
-  is a failure even in one band.
+  is a failure even in one band. Adjacent bands (3-4 vs 5-6, 5-6 vs 7-8)
+  must each name at least one checkable difference; if two adjacent bands
+  could describe the same response, rewrite them. And bands belong to ONE
+  criterion: reusing the same band wording across two criteria is a failure.
 
 EXAMPLES - for an unrelated task ("Write a 300-word product description for a
 mechanical keyboard aimed at first-time buyers"):
@@ -112,10 +115,12 @@ The example above is illustrative ONLY: never reuse its topic, product, or
 wording in your own query or criteria.
 
 FINAL SELF-CHECK before you output the JSON:
-1. Re-read each refinement principle from the guidance list. Every one of
-   them must appear concretely in the query itself (a stated length, a named
-   audience, a required format, a personalization hook...), not merely be
-   implied. Revise the query until each principle is visibly there.
+1. Go through the refinement principles ONE BY ONE. For each, point to the
+   exact phrase in your query that realizes it (a stated length, a named
+   audience, a required format...). Principles about personalization or the
+   user's identity need an explicit hook in the query: a named role,
+   background, or personal experience the writer must draw on. A principle
+   with no pointable phrase means the query is not done; revise it.
 2. Every explicit requirement in your query must be tested by at least one
    criterion, and no criterion may test anything the query does not state.
 3. Scan every score band for reusable ladder wording; rewrite any band that
