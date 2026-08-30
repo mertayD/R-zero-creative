@@ -122,7 +122,9 @@ automatically from the checkpoint path.
   10 replicates, despite each replicate having a different sampled
   `guidance_text`, is the real mode-collapse signal: the guidance was
   supposed to push each one in a different direction. TF-IDF + cosine
-  similarity (`scikit-learn`, already a repo dependency), threshold 0.85.
+  similarity (`scikit-learn`, already a repo dependency), English stopwords
+  removed, threshold 0.32 — both calibrated against blind human-protocol
+  judgment of 1,243 pairs (see `diversity.py`'s docstring).
 - **Length** — `query_len`/`criteria_len` per row, mean/stddev in the
   aggregate. Cheap, no judge call, often the first visible symptom of
   collapse or reward hacking (queries/criteria drifting shorter, or toward
