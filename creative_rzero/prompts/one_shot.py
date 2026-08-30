@@ -63,11 +63,11 @@ Create 5 strict evaluation criteria that can distinguish subtle differences in r
 Each criterion MUST include:
 - name: A concise criterion name
 - criteria_description: Detailed description emphasizing what the criterion evaluates
-- "1-2": Critical deficiencies and major issues
-- "3-4": Below average - noticeable shortcomings
-- "5-6": Average - adequate but not exemplary
-- "7-8": Above average - competent execution
-- "9-10": High - exceptional performance
+- "1-2": the concrete failures of a bottom-tier response to THIS task
+- "3-4": what such a response still gets right, and the checkable shortfall that caps it here
+- "5-6": the checkable gain over 3-4, and the specific gap that remains
+- "7-8": what is now done well, and the one concrete shortfall separating it from 9-10
+- "9-10": the observable behaviors of a response that meets every stated requirement
 
 Every criterion must:
 - Grade the writer's RESPONSE, never the prompt itself. Bands like "the prompt
@@ -115,16 +115,29 @@ The example above is illustrative ONLY: never reuse its topic, product, or
 wording in your own query or criteria.
 
 FINAL SELF-CHECK before you output the JSON:
-1. Go through the refinement principles ONE BY ONE. For each, point to the
-   exact phrase in your query that realizes it (a stated length, a named
-   audience, a required format...). Principles about personalization or the
-   user's identity need an explicit hook in the query: a named role,
-   background, or personal experience the writer must draw on. A principle
-   with no pointable phrase means the query is not done; revise it.
-2. Every explicit requirement in your query must be tested by at least one
-   criterion, and no criterion may test anything the query does not state.
-3. Scan every score band for reusable ladder wording; rewrite any band that
-   could be pasted under a different task unchanged.
+1. Go through the refinement principles ONE BY ONE and point to the exact
+   phrase in your query that realizes each; one phrase cannot satisfy two
+   principles. Two principles are commonly faked when present - check them
+   hardest:
+   - Personalization: the query must give the WRITER an identity or lived
+     experience to draw on, in second person ("As a ..., you ..." /
+     "drawing on your experience of ..."). A target audience, a named
+     character, or a "personalized" deliverable does NOT count.
+   - "Express concisely in one sentence": the query itself must be ONE
+     sentence. Count its sentences; if more than one, merge into a single
+     sentence without dropping any other principle's phrase.
+   A principle with no pointable phrase means the query is not done; revise it.
+2. List the query's explicit requirements (word count, format, tone,
+   audience, named content) and name the criterion that tests each one; a
+   stated word count or format with no criterion is a failure. No criterion
+   may test anything the query does not state, and no two criteria may own
+   the same requirement.
+3. Strip intensity words ("somewhat", "generally", "highly", "exceptionally",
+   "could be more") from every band. If any two bands then read the same -
+   adjacent bands of one criterion, or the same band slot of two criteria -
+   rewrite them around a different checkable fact: a count, a named element
+   present or missing, or a numeric range when the query states a number
+   ("within 450-550 words", never "well within the word count").
 
 STEP 4: IDENTIFY REQUIREMENTS
 Look for and identify any:
@@ -140,11 +153,11 @@ OUTPUT STAGE - Return ONLY this JSON format wrapped in a ```json fenced code blo
     {{
       "name": "Criterion 1 Name",
       "criteria_description": "Detailed description for the first criteria, emphasizing detailed and critical assessment.",
-      "1-2": "Low score description: Critical deficiencies and major issues that prevent adequate functionality.",
-      "3-4": "Below average score description: Lacking with noticeable shortcomings that impact overall effectiveness and require improvement.",
-      "5-6": "Average score description: Adequate but not exemplary. Baseline performance that meets essential requirements.",
-      "7-8": "Above average score description: Strong performance characterized by competent execution, though minor refinements are needed.",
-      "9-10": "High score description: Exceptional performance with all aspects optimally addressed, demonstrating superior effectiveness."
+      "1-2": "...",
+      "3-4": "...",
+      "5-6": "...",
+      "7-8": "...",
+      "9-10": "..."
     }},
     {{
       "name": "Criterion 2 Name",
