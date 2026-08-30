@@ -140,11 +140,17 @@ def compute_penalties(queries: list[str], batch_total: int) -> list[dict]:
 
 
 def append_memory(queries: list[str], path: str | None = None) -> int:
-    """Fold a completed phase's valid queries into the bank. Returns new size."""
+    """Fold a completed phase's valid queries into the bank. Returns new size.
+    Also refreshes this process's cached bank so a later compute_penalties()
+    in the same process sees the update (the reward path normally runs in a
+    fresh verl worker per phase, but don't depend on that)."""
+    global _memory, _memory_loaded
     path = path or memory_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     emb = embed(queries)
     if os.path.exists(path):
         emb = np.vstack([np.load(path)["emb"], emb])
     np.savez(path, emb=emb)
+    if path == memory_path():
+        _memory, _memory_loaded = emb, True
     return emb.shape[0]

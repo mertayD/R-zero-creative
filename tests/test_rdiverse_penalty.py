@@ -16,7 +16,7 @@ from creative_rzero.rewards import rdiverse_penalty  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for var in ("CHALLENGER_PENALTY_ALPHA", "CHALLENGER_PENALTY_BETA",
+    for var in ("CHALLENGER_PENALTY_ENABLED", "CHALLENGER_PENALTY_ALPHA", "CHALLENGER_PENALTY_BETA",
                 "CHALLENGER_PENALTY_LAMBDA", "CHALLENGER_PENALTY_TAU_MAX",
                 "CHALLENGER_PENALTY_TAU_MEAN", "CHALLENGER_PENALTY_CLUSTER_T"):
         monkeypatch.delenv(var, raising=False)
