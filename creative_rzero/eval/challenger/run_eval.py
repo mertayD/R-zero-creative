@@ -11,12 +11,14 @@ if `wandb` is importable and `WANDB_MODE` isn't "disabled"), not required —
 Per-row output schema (one JSON object per line):
     eval_id, domain, subdomain, replicate_idx,
     format_valid, format_failure_reason,
-    query, query_len, criteria_len,
+    query, output_json, query_len, criteria_len,
     domain_adherence, guidance_adherence, criteria_quality,
     judge_backend, judge_reasoning,
     near_duplicate, near_duplicate_of, near_duplicate_similarity
 Judge/diversity fields are None for format-invalid rows (nothing valid to
-judge or compare).
+judge or compare). `output_json` is the challenger's whole parsed output
+(query + criteria, pretty-printed) for valid rows and the raw model text for
+invalid ones, so every row can be audited in full from the W&B rows table.
 
 `vllm`/`transformers` are imported lazily inside `_load_model`/`_generate`,
 mirroring generate_prompts.py::run_generation, so importing this module (for
@@ -43,6 +45,7 @@ from creative_rzero.eval.challenger.diversity import (  # noqa: E402
     semantic_near_duplicate_pairs,
 )
 from creative_rzero.steps.generate_prompts import validate_one_shot_response  # noqa: E402
+from evaluator.llm import JudgeAPIError  # noqa: E402
 
 try:
     import wandb as _wandb
@@ -125,12 +128,43 @@ def _generate(llm, tokenizer, rows: list[dict]) -> list[str]:
     return [c.outputs[0].text for c in completions]
 
 
+def _judge_one(agent, row: dict, query: str, criteria: list[dict], judge_retries: int) -> dict:
+    try:
+        judged = challenger_judge_agent.score_generated_prompt(
+            agent,
+            domain_name=row["domain_name"],
+            subdomain=row["subdomain"],
+            guidance_applied=row["guidance_applied"],
+            query=query,
+            criteria=criteria,
+            max_retries=judge_retries,
+        )
+        return {
+            "domain_adherence": judged["domain_adherence"],
+            "guidance_adherence": judged["guidance_adherence"],
+            "criteria_quality": judged["criteria_quality"],
+            "judge_backend": judged["judge_backend"],
+            "judge_reasoning": judged["reasoning"],
+        }
+    except (challenger_judge_agent.JudgeParseError, JudgeAPIError) as e:
+        # One judge outage must not sink a 760-row run; the row is marked and
+        # the judge_backend counts in the summary make it visible.
+        return {"judge_backend": "error", "judge_reasoning": f"{type(e).__name__}: {e}"}
+
+
 def score_rows(rows: list[dict], responses: list[str], agent, judge_retries: int = 3) -> list[dict]:
     """Format-validate each response (reusing validate_one_shot_response
     unchanged) and, for format-valid rows, run one judge call for
-    domain/guidance/criteria-quality. Does not add `near_duplicate` — that's
-    a batch-level pass over the whole run, see `add_diversity`."""
+    domain/guidance/criteria-quality. Judge calls are HTTP-bound and run
+    concurrently (CHALLENGER_EVAL_JUDGE_WORKERS, default 8; 16 overran the
+    critic server's 120s read timeout on an L4) — sequentially
+    they dominated wall-clock (~700 calls at ~5s each vs ~6 min of
+    generation). Output order is preserved. Does not add `near_duplicate` —
+    that's a batch-level pass over the whole run, see `add_diversity`."""
+    from concurrent.futures import ThreadPoolExecutor
+
     scored = []
+    jobs: list[tuple[int, dict, str, list[dict]]] = []
     for row, response in zip(rows, responses):
         is_valid, parsed, _thinking, fmt_reason = validate_one_shot_response(response)
         record = {
@@ -141,6 +175,7 @@ def score_rows(rows: list[dict], responses: list[str], agent, judge_retries: int
             "format_valid": is_valid,
             "format_failure_reason": fmt_reason,
             "query": "",
+            "output_json": response,  # raw model output; replaced by the parsed JSON when format-valid
             "query_len": 0,
             "criteria_len": 0,
             "domain_adherence": None,
@@ -153,27 +188,17 @@ def score_rows(rows: list[dict], responses: list[str], agent, judge_retries: int
             query = parsed.get("query", "")
             criteria = parsed.get("criteria", [])
             record["query"] = query
+            record["output_json"] = json.dumps(parsed, indent=2, ensure_ascii=False)
             record["query_len"] = len(query)
             record["criteria_len"] = len(json.dumps(criteria))
-            try:
-                judged = challenger_judge_agent.score_generated_prompt(
-                    agent,
-                    domain_name=row["domain_name"],
-                    subdomain=row["subdomain"],
-                    guidance_applied=row["guidance_applied"],
-                    query=query,
-                    criteria=criteria,
-                    max_retries=judge_retries,
-                )
-                record["domain_adherence"] = judged["domain_adherence"]
-                record["guidance_adherence"] = judged["guidance_adherence"]
-                record["criteria_quality"] = judged["criteria_quality"]
-                record["judge_backend"] = judged["judge_backend"]
-                record["judge_reasoning"] = judged["reasoning"]
-            except challenger_judge_agent.JudgeParseError as e:
-                record["judge_backend"] = "error"
-                record["judge_reasoning"] = str(e)
+            jobs.append((len(scored), row, query, criteria))
         scored.append(record)
+
+    workers = max(1, int(os.getenv("CHALLENGER_EVAL_JUDGE_WORKERS", "8")))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = pool.map(lambda j: _judge_one(agent, j[1], j[2], j[3], judge_retries), jobs)
+        for (idx, _row, _q, _c), judged in zip(jobs, results):
+            scored[idx].update(judged)
     return scored
 
 
@@ -261,7 +286,7 @@ def _rows_table(scored: list[dict]):
         "eval_id", "domain", "subdomain", "replicate_idx", "format_valid",
         "format_failure_reason", "domain_adherence", "guidance_adherence",
         "criteria_quality", "judge_backend", "near_duplicate", "near_duplicate_of",
-        "near_duplicate_similarity", "query_preview",
+        "near_duplicate_similarity", "output_json",
     ]
     table = _wandb.Table(columns=columns)
     for r in scored:
@@ -269,7 +294,7 @@ def _rows_table(scored: list[dict]):
             r["eval_id"], r["domain"], r["subdomain"], r["replicate_idx"], r["format_valid"],
             r["format_failure_reason"], r["domain_adherence"], r["guidance_adherence"],
             r["criteria_quality"], r["judge_backend"], r["near_duplicate"],
-            r["near_duplicate_of"], r["near_duplicate_similarity"], r["query"][:200],
+            r["near_duplicate_of"], r["near_duplicate_similarity"], r["output_json"],
         )
     return table
 

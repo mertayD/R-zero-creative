@@ -6,9 +6,11 @@ Reuses evaluation/writing_bench/evaluator/{llm,mock}.py's `.run(prompt) ->
 judge_prompts.py supplies a prompt/schema (`domain_adherence`,
 `guidance_adherence`, `criteria_quality`) neither agent was originally built
 for. `CriticServerAgent` (judge.type=sft-critic elsewhere in the repo) is
-deliberately not wired in here — it's a model fine-tuned to score a *solver
-response* against *criteria*, not to judge whether a *generated prompt*
-fits its assigned domain/guidance; a different task it was never trained on.
+available as `--judge-type sft-critic`, with a caveat: that model was
+fine-tuned to score a *solver response* against *criteria*, not to judge
+whether a *generated prompt* fits its assigned domain/guidance — a task it
+was never trained on, so expect more schema failures (`judge_backend`
+"error" rows) and less calibrated labels than the Claude judge.
 
 MockJudgeAgent caveat: its `run()` (evaluator/mock.py) looks for "Name: X"
 lines in the prompt — the shape BatchEvalAgent bakes in for WritingBench's
@@ -35,12 +37,13 @@ for _p in (str(_REPO_ROOT), str(_WB_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from evaluator.critic_server import CriticServerAgent  # noqa: E402
 from evaluator.llm import ClaudeAgent  # noqa: E402
 from evaluator.mock import MockJudgeAgent  # noqa: E402
 
 from creative_rzero.eval.challenger import judge_prompts  # noqa: E402
 
-VALID_JUDGE_TYPES = ("claude", "mock")
+VALID_JUDGE_TYPES = ("claude", "sft-critic", "mock")
 
 _EXPECTED_FIELDS = ("domain_adherence", "guidance_adherence", "criteria_quality")
 
@@ -56,6 +59,8 @@ def get_agent(judge_type: str):
     own system prompt (not WritingBench's `batch_evaluate_system`)."""
     if judge_type == "claude":
         return ClaudeAgent(system_prompt=judge_prompts.SYSTEM_PROMPT)
+    if judge_type == "sft-critic":
+        return CriticServerAgent(system_prompt=judge_prompts.SYSTEM_PROMPT)
     if judge_type == "mock":
         return MockJudgeAgent(system_prompt=judge_prompts.SYSTEM_PROMPT)
     raise ValueError(f"judge_type={judge_type!r} must be one of {VALID_JUDGE_TYPES}")

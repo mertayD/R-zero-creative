@@ -64,6 +64,11 @@ CRITIC_MODEL_ID              = "AQuarterMile/WritingBench-Critic-Model-Qwen-7B"
 CRITIC_SERVED_NAME           = os.getenv("CRITIC_SERVED_NAME", "writingbench-critic-qwen-7b")
 CRITIC_JUDGE_GPU             = os.getenv("CRITIC_JUDGE_GPU", "L4")
 CRITIC_JUDGE_SCALEDOWN_WINDOW_S = int(os.getenv("CRITIC_JUDGE_SCALEDOWN_WINDOW_S", "3600"))
+# Same deployed endpoint configs/base.yaml points judge.critic_url at; the
+# standalone challenger eval has no experiment config, so it reads this.
+CRITIC_JUDGE_URL             = os.getenv(
+    "WB_CRITIC_URL", "https://columbia-daplab--r-zero-creative-critic-judge-server.modal.run"
+)
 
 # creative_rzero/eval/challenger — standalone challenger eval harness. One
 # GPU is enough (vLLM inference only, no training), so this gets its own
@@ -275,6 +280,7 @@ def run_challenger_eval(
     wandb_group: str = "",
     out_path: str = "",
     dup_method: str = "embedding",
+    critic_url: str = "",
 ) -> str:
     """Run creative_rzero/eval/challenger's standalone harness (build_dataset.py's
     frozen eval set -> generate -> judge -> aggregate) against `checkpoint`
@@ -294,6 +300,9 @@ def run_challenger_eval(
     import json as _json
 
     storage = _container_setup(wandb_group or "challenger-eval")
+    if judge_type == "sft-critic":
+        os.environ["WB_CRITIC_URL"] = critic_url or CRITIC_JUDGE_URL
+        os.environ.setdefault("WB_CRITIC_MODEL", CRITIC_SERVED_NAME)
     from creative_rzero.eval.challenger.run_eval import run as run_harness
 
     repo = dataset_repo or f"{HUGGINGFACENAME}/{CHALLENGER_EVAL_DATASET_REPO}"
@@ -536,6 +545,7 @@ def challenger_eval(
     limit: int = 0,
     step: int = 0,
     dup_method: str = "embedding",
+    critic_url: str = "",
 ):
     """Trigger a challenger eval and block until it's done, printing the
     aggregate summary — one command, immediate results, no separate polling
@@ -555,6 +565,7 @@ def challenger_eval(
         step=step or None,
         wandb_group=os.environ.get("WANDB_RUN_GROUP", ""),
         dup_method=dup_method,
+        critic_url=critic_url,
     )
     print(summary_json)
 

@@ -71,7 +71,15 @@ def test_score_generated_prompt_via_mock_agent_returns_all_three_dimensions():
 def test_get_agent_rejects_unknown_judge_type():
     from creative_rzero.eval.challenger import challenger_judge_agent
 
-    with pytest.raises(ValueError, match="sft-critic"):
+    with pytest.raises(ValueError, match="gpt-4"):
+        challenger_judge_agent.get_agent("gpt-4")
+
+
+def test_get_agent_sft_critic_requires_server_url(monkeypatch):
+    from creative_rzero.eval.challenger import challenger_judge_agent
+
+    monkeypatch.delenv("WB_CRITIC_URL", raising=False)
+    with pytest.raises(RuntimeError, match="WB_CRITIC_URL"):
         challenger_judge_agent.get_agent("sft-critic")
 
 
