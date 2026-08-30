@@ -53,10 +53,20 @@ _embedder = None
 def _get_embedder():
     global _embedder
     if _embedder is None:
-        from sentence_transformers import SentenceTransformer
+        try:
+            import torch
+            from sentence_transformers import SentenceTransformer
+        except ImportError as e:
+            raise ImportError(
+                "The embedding duplicate detector needs the optional `sentence-transformers` "
+                "dependency (`pip install sentence-transformers`); alternatively run the eval "
+                "with `--dup-method tfidf`, which has no extra dependencies."
+            ) from e
+        # fp16 only where it's actually supported; CPU fallback stays fp32
+        dtype = "float16" if torch.cuda.is_available() else "float32"
         _embedder = SentenceTransformer(
             EMBEDDING_MODEL,
-            model_kwargs={"torch_dtype": "float16"},
+            model_kwargs={"torch_dtype": dtype},
             tokenizer_kwargs={"padding_side": "left"},
         )
         _embedder.max_seq_length = 2048
@@ -71,12 +81,13 @@ def semantic_near_duplicate_pairs(
     if len(queries) < 2:
         return []
     emb = _get_embedder().encode(queries, normalize_embeddings=True, show_progress_bar=False)
+    sims = emb @ emb.T
     n = len(queries)
     return [
-        (i, j, float(emb[i] @ emb[j]))
+        (i, j, float(sims[i, j]))
         for i in range(n)
         for j in range(i + 1, n)
-        if float(emb[i] @ emb[j]) >= threshold
+        if sims[i, j] >= threshold
     ]
 
 
