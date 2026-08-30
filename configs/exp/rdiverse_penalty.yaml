@@ -1,0 +1,57 @@
+# R-Diverse challenger penalty (arXiv:2602.13103) on top of the standard
+# co-evolution recipe — forks configs/base.yaml and flips on the penalty:
+# every training step the challenger reward becomes
+#   Rtotal = Runcertainty - alpha*Prep(batch) - beta*PMAP(memory bank M),
+# with M extended at the end of each challenger phase (the paper's
+# end-of-iteration update; see creative_rzero/rewards/rdiverse_penalty.py).
+# All penalty knobs stay at their config.py defaults: alpha=beta=1.0,
+# lambda=0.5, Qwen3-Embedding-4B, cluster threshold 0.72 and taus 0.47/0.20
+# (blind-calibrated / quantile-mapped — provenance in the module docstring).
+#
+# Run shape mirrors the seed-paired A/B in which this penalty was validated
+# (whole-run duplication 30.1% -> 27.4%, final-step 52% -> 20% vs the same
+# recipe without the penalty).
+run:
+  abbr: rdiv
+  num_iters: 3
+  experiment: rdiverse-penalty
+
+challenger:
+  model_path: Qwen/Qwen3-4B-Base
+  max_steps: 4
+  rollout_n: 8
+  num_train: 4
+  num_val: 1
+  max_response_length: 2048
+  solver_query:
+    max_tokens: 4096
+
+solver:
+  model_path: Qwen/Qwen3-4B-Base
+  max_steps: 1
+  rollout_n: 4
+  num_train: 4
+  num_val: 1
+  max_response_length: 2048
+
+judge:
+  type: sft-critic
+  critic_url: https://columbia-daplab--r-zero-creative-critic-judge-server.modal.run
+  critic_model: writingbench-critic-qwen-7b
+  max_workers: 8
+
+rewards:
+  penalty:
+    enabled: true               # everything else: config.py defaults (paper values, Qwen-mapped taus)
+
+verl:
+  data:
+    apply_chat_template_kwargs:
+      enable_thinking: false
+  worker:
+    rollout:
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.6
+  trainer:
+    n_gpus_per_node: 1
+    logger: ["console", "wandb"]
