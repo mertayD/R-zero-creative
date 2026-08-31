@@ -32,7 +32,7 @@ from typing import Callable
 
 import requests
 
-from evaluator.llm import JudgeAPIError
+from evaluation.writing_bench.evaluator.llm import JudgeAPIError
 
 DEFAULT_CRITIC_MODEL = os.environ.get("WB_CRITIC_MODEL", "writingbench-critic-qwen-7b")
 

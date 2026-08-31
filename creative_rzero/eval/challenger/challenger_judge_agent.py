@@ -35,8 +35,8 @@ for _p in (str(_REPO_ROOT), str(_WB_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from evaluator.llm import ClaudeAgent  # noqa: E402
-from evaluator.mock import MockJudgeAgent  # noqa: E402
+from evaluation.writing_bench.evaluator.llm import ClaudeAgent
+from evaluation.writing_bench.evaluator.mock import MockJudgeAgent
 
 from creative_rzero.eval.challenger import judge_prompts  # noqa: E402
 

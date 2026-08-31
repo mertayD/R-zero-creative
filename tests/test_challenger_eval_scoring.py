@@ -248,6 +248,65 @@ def test_add_diversity_rejects_unknown_method():
         add_diversity([], method="levenshtein")
 
 
+def test_add_diversity_records_partner_and_similarity():
+    from creative_rzero.eval.challenger.run_eval import add_diversity
+
+    def _r(eval_id, query, valid=True):
+        return {
+            "eval_id": eval_id, "domain": "D1", "subdomain": "short story",
+            "format_valid": valid, "query": query,
+        }
+
+    scored = [
+        _r("D1|short story|0", "Write a formal quarterly report for the finance team about Q3 revenue."),
+        _r("D1|short story|1", "Write a formal quarterly report for the finance team about Q3 revenue!"),
+        _r("D1|short story|2", "Compose a whimsical bedtime story about a dragon afraid of the dark."),
+        _r("D1|short story|3", "", valid=False),
+    ]
+    add_diversity(scored, method="tfidf")
+
+    assert scored[0]["near_duplicate"] and scored[1]["near_duplicate"]
+    assert scored[0]["near_duplicate_of"] == "D1|short story|1"
+    assert scored[1]["near_duplicate_of"] == "D1|short story|0"
+    assert scored[0]["near_duplicate_similarity"] >= 0.32
+    assert scored[0]["near_duplicate_similarity"] == scored[1]["near_duplicate_similarity"]
+
+    assert scored[2]["near_duplicate"] is False
+    assert scored[2]["near_duplicate_of"] is None and scored[2]["near_duplicate_similarity"] is None
+
+    assert scored[3]["near_duplicate"] is None
+    assert scored[3]["near_duplicate_of"] is None and scored[3]["near_duplicate_similarity"] is None
+
+
+def test_add_diversity_embedding_method_uses_semantic_pairs(monkeypatch):
+    from creative_rzero.eval.challenger import run_eval
+
+    def fake_semantic_pairs(queries, threshold=None):
+        return [(0, 1, 0.91)]
+
+    monkeypatch.setattr(run_eval, "semantic_near_duplicate_pairs", fake_semantic_pairs)
+    scored = [
+        {"eval_id": "D1|poetry|0", "domain": "D1", "subdomain": "poetry",
+         "format_valid": True, "query": "a"},
+        {"eval_id": "D1|poetry|1", "domain": "D1", "subdomain": "poetry",
+         "format_valid": True, "query": "b"},
+        {"eval_id": "D1|poetry|2", "domain": "D1", "subdomain": "poetry",
+         "format_valid": True, "query": "c"},
+    ]
+    run_eval.add_diversity(scored)  # embedding is the default
+
+    assert scored[0]["near_duplicate"] and scored[1]["near_duplicate"]
+    assert scored[0]["near_duplicate_of"] == "D1|poetry|1"
+    assert scored[0]["near_duplicate_similarity"] == 0.91
+    assert scored[2]["near_duplicate"] is False
+
+
+def test_add_diversity_rejects_unknown_method():
+    from creative_rzero.eval.challenger.run_eval import add_diversity
+
+    with pytest.raises(ValueError, match="method"):
+        add_diversity([], method="levenshtein")
+
 # =============================================================================
 # aggregate
 # =============================================================================
