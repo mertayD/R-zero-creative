@@ -128,6 +128,7 @@ image = (
         "pylatexenc==2.10",
         "tabulate==0.9.0",
         "jsonlines==4.0.0",
+        "sentence-transformers==3.4.1",
         "latex2sympy2_extended==1.10.1",
         "torchdata==0.11.0",
         "codetiming",
@@ -273,6 +274,7 @@ def run_challenger_eval(
     step: int | None = None,
     wandb_group: str = "",
     out_path: str = "",
+    dup_method: str = "embedding",
 ) -> str:
     """Run creative_rzero/eval/challenger's standalone harness (build_dataset.py's
     frozen eval set -> generate -> judge -> aggregate) against `checkpoint`
@@ -307,6 +309,7 @@ def run_challenger_eval(
         limit=limit,
         step=step,
         wandb_group=wandb_group,
+        dup_method=dup_method,
     )
     volume.commit()
     print(f"=== Challenger eval complete — results: {resolved_out} ===")
@@ -532,6 +535,7 @@ def challenger_eval(
     judge_type: str = "claude",
     limit: int = 0,
     step: int = 0,
+    dup_method: str = "embedding",
 ):
     """Trigger a challenger eval and block until it's done, printing the
     aggregate summary — one command, immediate results, no separate polling
@@ -550,6 +554,7 @@ def challenger_eval(
         limit=limit or None,
         step=step or None,
         wandb_group=os.environ.get("WANDB_RUN_GROUP", ""),
+        dup_method=dup_method,
     )
     print(summary_json)
 

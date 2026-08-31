@@ -38,7 +38,10 @@ if str(_REPO_ROOT) not in sys.path:
 
 from creative_rzero.eval.challenger import challenger_judge_agent  # noqa: E402
 from creative_rzero.eval.challenger.aggregate import aggregate_rows  # noqa: E402
-from creative_rzero.eval.challenger.diversity import near_duplicate_pairs  # noqa: E402
+from creative_rzero.eval.challenger.diversity import (  # noqa: E402
+    near_duplicate_pairs,
+    semantic_near_duplicate_pairs,
+)
 from creative_rzero.steps.generate_prompts import validate_one_shot_response  # noqa: E402
 
 try:
@@ -174,15 +177,22 @@ def score_rows(rows: list[dict], responses: list[str], agent, judge_retries: int
     return scored
 
 
-def add_diversity(scored: list[dict]) -> None:
+def add_diversity(scored: list[dict], method: str = "embedding") -> None:
     """Mutates `scored` in place, adding `near_duplicate`, `near_duplicate_of`
     (the eval_id of the closest flagged partner), and
-    `near_duplicate_similarity` (TF-IDF cosine to that partner — how strong
-    the match is, where values near the 0.32 threshold are borderline and
-    values toward 1.0 are verbatim-level) to every row.
-    Grouped by (domain, subdomain) — see diversity.py's module docstring for
-    why the comparison is per-group rather than across the whole run.
-    Format-invalid rows (no `query` to compare) get None for all three."""
+    `near_duplicate_similarity` (cosine to that partner — how strong the
+    match is; borderline near the method's threshold, verbatim-level toward
+    1.0) to every row. `method` picks the detector: "embedding"
+    (Qwen3-Embedding-4B cosine, the default — catches reworded same-task
+    duplicates) or "tfidf" (lexical, no model download, the pre-existing
+    layer). Grouped by (domain, subdomain) — see diversity.py's module
+    docstring for why the comparison is per-group rather than across the
+    whole run. Format-invalid rows (no `query` to compare) get None for all
+    three."""
+    pair_fns = {"embedding": semantic_near_duplicate_pairs, "tfidf": near_duplicate_pairs}
+    if method not in pair_fns:
+        raise ValueError(f"add_diversity method={method!r} must be one of {sorted(pair_fns)}")
+    pair_fn = pair_fns[method]
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in scored:
         r["near_duplicate"] = None
@@ -194,7 +204,7 @@ def add_diversity(scored: list[dict]) -> None:
     for group_rows in groups.values():
         queries = [r["query"] for r in group_rows]
         closest: dict[int, tuple[float, int]] = {}
-        for i, j, sim in near_duplicate_pairs(queries):
+        for i, j, sim in pair_fn(queries):
             if sim > closest.get(i, (-1.0, -1))[0]:
                 closest[i] = (sim, j)
             if sim > closest.get(j, (-1.0, -1))[0]:
@@ -306,15 +316,26 @@ def run(
     seed: int = 42,
     step: int | None = None,
     wandb_group: str = "",
+    dup_method: str = "embedding",
 ) -> dict:
     rows = load_eval_set(dataset_repo, local_path, limit=limit)
 
     llm, tokenizer = _load_model(model, seed=seed)
     responses = _generate(llm, tokenizer, rows)
+    # Free vLLM's GPU reservation before scoring: the embedding dup detector
+    # loads Qwen3-Embedding-4B (~8GB) on the same device.
+    del llm
+    import gc
+    gc.collect()
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except ImportError:
+        pass
 
     agent = challenger_judge_agent.get_agent(judge_type)
     scored = score_rows(rows, responses, agent)
-    add_diversity(scored)
+    add_diversity(scored, method=dup_method)
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -344,6 +365,10 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=None, help="Score only the first N rows (smoke runs)")
     parser.add_argument("--out-path", type=str, required=True)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--dup-method", type=str, default="embedding", choices=("embedding", "tfidf"),
+        help="near-duplicate detector: Qwen3-Embedding-4B cosine (default) or lexical TF-IDF",
+    )
     parser.add_argument("--step", type=int, default=None, help="Checkpoint step, used as the wandb.log x-axis")
     parser.add_argument("--wandb-group", type=str, default="", help="wandb run group (e.g. the coevolve run abbr)")
     args = parser.parse_args()
@@ -361,4 +386,5 @@ if __name__ == "__main__":
         seed=args.seed,
         step=args.step,
         wandb_group=args.wandb_group,
+        dup_method=args.dup_method,
     )
