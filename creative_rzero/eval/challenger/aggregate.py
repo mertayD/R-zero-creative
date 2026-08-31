@@ -29,6 +29,7 @@ def _group_stats(rows: list[dict]) -> dict[str, Any]:
 
     judged_rows = [r for r in format_valid_rows if r["domain_adherence"] is not None]
     dup_rows = [r for r in format_valid_rows if r.get("near_duplicate") is not None]
+    self_bleu_rows = [r for r in format_valid_rows if r.get("group_self_bleu") is not None]
     query_lens = [r["query_len"] for r in format_valid_rows]
 
     return {
@@ -41,6 +42,7 @@ def _group_stats(rows: list[dict]) -> dict[str, Any]:
         "duplicate_rate": (
             sum(1 for r in dup_rows if r["near_duplicate"]) / len(dup_rows) if dup_rows else None
         ),
+        "self_bleu_mean": _mean_or_none([r["group_self_bleu"] for r in self_bleu_rows]),
         "query_len_mean": _mean_or_none(query_lens),
         "query_len_stddev": pstdev(query_lens) if len(query_lens) > 1 else None,
         "criteria_len_mean": _mean_or_none([r["criteria_len"] for r in format_valid_rows]),
