@@ -41,8 +41,9 @@ judge:
   max_workers: 8
 
 rewards:
-  penalty:
-    enabled: true               # everything else: config.py defaults (paper values, Qwen-mapped taus)
+  challenger:
+    rep_penalty:
+      enabled: true               # everything else: config.py defaults (paper values, Qwen-mapped taus)
 
 verl:
   data:

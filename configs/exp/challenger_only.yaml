@@ -28,6 +28,11 @@ solver:
   num_val: 1
   max_response_length: 2048
 
+rewards:
+  challenger:
+    rep_penalty:
+      enabled: true               # everything else: config.py defaults (paper values, Qwen-mapped taus)
+
 judge:
   type: sft-critic                      # random scores, no Perplexity/Claude call — this run is wiring validation, not judge quality
   critic_url: https://columbia-daplab--r-zero-creative-critic-judge-server.modal.run

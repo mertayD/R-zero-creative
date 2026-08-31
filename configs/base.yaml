@@ -82,6 +82,18 @@ rewards:
     type: rank                      # each sample is judged, then ranked against the other samples for the same prompt; reward is its normalized rank position
   challenger:
     type: uncertainty                # rewards prompts the solver is maximally uncertain about (judged score near the midpoint of the scale); prompts the solver aces or fails outright score near zero
+    # R-Diverse challenger penalty (arXiv:2602.13103) applied on top of the
+    # challenger reward above — see creative_rzero/rewards/rdiverse_penalty.py
+    # for the formula and the provenance of the tau/cluster_threshold values.
+    rep_penalty:
+      enabled: false                    # turn on the R-Diverse penalty (Rtotal = Runcertainty - alpha*Prep - beta*PMAP)
+      cluster_threshold: 0.72           # Prep: cosine similarity at/above which two batch queries join the same cluster (eval duplicate detector's blind-calibrated bar)
+      lam: 0.5                          # PMAP: mix weight between max- and mean-similarity terms vs the memory bank
+      tau_max: 0.47                     # PMAP: hinge tolerance on max similarity to the memory bank (paper's 0.5, Qwen-mapped)
+      tau_mean: 0.2                     # PMAP: hinge tolerance on mean similarity to the memory bank (paper's 0.25, Qwen-mapped)
+      alpha: 1.0                        # weight of Prep (within-batch cluster share) in the total penalty
+      beta: 1.0                         # weight of PMAP (memory-bank similarity) in the total penalty
+      memory_update: phase              # phase = fold valid queries into the memory bank at end of each challenger phase (paper's Eq. 6); step = grow the bank every training step
 
 # ---------------------------------------------------------------------------
 # verl — the trainer's own config, passed through to verl.trainer.main

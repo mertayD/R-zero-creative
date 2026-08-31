@@ -123,10 +123,15 @@ class ChallengerPenaltyConfig:
 
 
 @dataclass
+class ChallengerRewardSelector(RewardSelector):
+    type: str = "uncertainty"
+    rep_penalty: ChallengerPenaltyConfig = field(default_factory=ChallengerPenaltyConfig)
+
+
+@dataclass
 class RewardsConfig:
     solver: RewardSelector = field(default_factory=lambda: RewardSelector(type="rank"))
-    challenger: RewardSelector = field(default_factory=lambda: RewardSelector(type="uncertainty"))
-    penalty: ChallengerPenaltyConfig = field(default_factory=ChallengerPenaltyConfig)
+    challenger: ChallengerRewardSelector = field(default_factory=ChallengerRewardSelector)
 
 
 @dataclass

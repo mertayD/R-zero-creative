@@ -1,6 +1,6 @@
 # Step-wise variant of configs/exp/rdiverse_penalty.yaml — identical recipe,
 # except the penalty's memory bank grows EVERY training step instead of only
-# at the end of each challenger phase (rewards.penalty.memory_update: step).
+# at the end of each challenger phase (rewards.challenger.rep_penalty.memory_update: step).
 # This deviates from the paper's end-of-iteration update (Eq. 6): a query
 # generated at step 2 already raises PMAP for lookalikes at step 3, closing
 # the within-phase blind window the paper's schedule leaves open.
@@ -38,9 +38,10 @@ judge:
   max_workers: 8
 
 rewards:
-  penalty:
-    enabled: true
-    memory_update: step         # the one deviation from rdiverse_penalty.yaml
+  challenger:
+    rep_penalty:
+      enabled: true
+      memory_update: step         # the one deviation from rdiverse_penalty.yaml
 
 verl:
   data:
