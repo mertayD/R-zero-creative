@@ -121,12 +121,10 @@ automatically from the checkpoint path.
   *supposed* to look different. Near-identical queries *within* one pair's
   10 replicates, despite each replicate having a different sampled
   `guidance_text`, is the real mode-collapse signal: the guidance was
-  supposed to push each one in a different direction. Default detector:
-  Qwen3-Embedding-4B cosine similarity, which catches reworded same-task
-  duplicates that share few literal words; `--dup-method tfidf` falls back
-  to TF-IDF + cosine (English stopwords removed, threshold 0.32) with no
-  model download. Both thresholds calibrated against blind human-protocol
-  judgment of the same pair set (see `diversity.py`'s docstring).
+  supposed to push each one in a different direction. TF-IDF + cosine
+  similarity (`scikit-learn`, already a repo dependency), English stopwords
+  removed, threshold 0.32 — both calibrated against blind human-protocol
+  judgment of 1,243 pairs (see `diversity.py`'s docstring).
 - **Length** — `query_len`/`criteria_len` per row, mean/stddev in the
   aggregate. Cheap, no judge call, often the first visible symptom of
   collapse or reward hacking (queries/criteria drifting shorter, or toward
