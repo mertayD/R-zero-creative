@@ -530,7 +530,7 @@ def challenger_only(config: str = "configs/exp/validation_tiny.yaml"):
 
 @app.local_entrypoint()
 def challenger_eval(
-    checkpoint: str,
+    checkpoint: str = "Qwen/Qwen3-4B-Base",
     dataset_repo: str = "",
     judge_type: str = "claude",
     limit: int = 0,

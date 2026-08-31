@@ -32,6 +32,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from tqdm import tqdm
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -112,6 +114,7 @@ def _generate(llm, tokenizer, rows: list[dict]) -> list[str]:
             prompt = f"system: {row['system_prompt']}\n\nuser: {row['user_prompt']}"
         prompts.append(prompt)
 
+    #TODO(dayanc): Eval sampling params should be in sync with training config.
     sampling_params = vllm.SamplingParams(
         max_tokens=32768,
         temperature=0.6,
@@ -131,7 +134,7 @@ def score_rows(rows: list[dict], responses: list[str], agent, judge_retries: int
     domain/guidance/criteria-quality. Does not add `near_duplicate` — that's
     a batch-level pass over the whole run, see `add_diversity`."""
     scored = []
-    for row, response in zip(rows, responses):
+    for row, response in tqdm(list(zip(rows, responses)), desc="Scoring rows"):
         is_valid, parsed, _thinking, fmt_reason = validate_one_shot_response(response)
         record = {
             "eval_id": row["eval_id"],
@@ -201,7 +204,7 @@ def add_diversity(scored: list[dict], method: str = "embedding") -> None:
         if r["format_valid"]:
             groups[(r["domain"], r["subdomain"])].append(r)
 
-    for group_rows in groups.values():
+    for group_rows in tqdm(list(groups.values()), desc="Diversity groups"):
         queries = [r["query"] for r in group_rows]
         closest: dict[int, tuple[float, int]] = {}
         for i, j, sim in pair_fn(queries):
@@ -333,18 +336,25 @@ def run(
     except ImportError:
         pass
 
-    agent = challenger_judge_agent.get_agent(judge_type)
-    scored = score_rows(rows, responses, agent)
-    add_diversity(scored, method=dup_method)
 
+    print("Initializing Claude Judge Agent")
+    agent = challenger_judge_agent.get_agent(judge_type)
+    print("Initialized Claude Judge Agent")
+    print("Scoring rows")
+    scored = score_rows(rows, responses, agent)
+    print("Done Scoring Rows")
+    print("Running Diversity Eval")
+    add_diversity(scored, method=dup_method)
+    print("Completed Diversity Eval")
+    print(f"Writing results to output path: {out_path}")
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(json.dumps(r) for r in scored) + "\n")
-
+    print("Creating Summary")
     summary = aggregate_rows(scored)
     summary_path = out_path.with_suffix(".summary.json")
     summary_path.write_text(json.dumps(summary, indent=2))
-
+    print("Done Creating Summary")
     print(f"Wrote {len(scored)} scored rows to {out_path}")
     print(f"Wrote aggregate summary to {summary_path}")
 
