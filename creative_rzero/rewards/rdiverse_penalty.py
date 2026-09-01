@@ -1,0 +1,206 @@
+"""R-Diverse challenger penalties (arXiv:2602.13103), text-embedding variant.
+
+Implements Rtotal(q) = Runcertainty(q) - alpha*Prep(q, B) - beta*PMAP(q, M):
+
+  Prep  — within-batch repetition: cluster the batch's valid queries by
+          embedding cosine >= cluster_threshold (connected components, the
+          embedding analog of R-Zero's BLEU agglomerative clustering); a
+          query's penalty is its cluster's share of the batch, |Ci|/|B|.
+  PMAP  — memory-augmented penalty vs the persistent bank M of all valid
+          queries from previous challenger phases (paper Eq. 9):
+            lam*[max_sim - tau_max]+ + (1-lam)*[mean_sim - tau_mean]+
+          M is frozen during a phase and extended between phases
+          (steps/memory_bank.py), per the paper's end-of-iteration update.
+
+Deviation from the paper, by design: phi is a direct sentence embedding of
+the query text instead of SAM's question->solver-code->code-encoder
+pipeline — creative-writing queries have no canonical solver program.
+The embedder is Qwen3-Embedding-4B, the same model the eval harness's
+duplicate detector uses (eval/challenger/diversity.py), so training-time
+penalties and eval-time measurement share one similarity scale. The
+cluster threshold reuses that detector's blind-calibrated duplicate
+boundary (0.72); tau_max/tau_mean are the paper's 0.5/0.25 quantile-mapped
+from MiniLM's similarity distribution into Qwen's on the same blind pair
+population (0.5 -> 0.47, 0.25 -> 0.20; 1,276 blind-scored within-subdomain
+pairs + 3,000 cross-subdomain pairs, 2026-08-27). Memory admission is format-validity only (no
+uncertainty band).
+
+All knobs arrive via env (projected from config by verl_entry's bridge).
+Embedding runs on CPU; a 32-query step batch through the 4B embedder adds
+seconds per step, small next to the judge pass.
+"""
+
+from __future__ import annotations
+
+import os
+
+import numpy as np
+
+_embedder = None
+_memory = None
+_memory_loaded = False
+
+
+def enabled() -> bool:
+    return os.environ.get("CHALLENGER_PENALTY_ENABLED", "0") == "1"
+
+
+def _cfg(name: str, default: float) -> float:
+    return float(os.environ.get(name, default))
+
+
+def memory_path() -> str:
+    """One bank per run ({abbr}_{run_ts}.npz), shared across its iterations."""
+    name = os.environ.get("MEMORY_BANK_NAME")
+    if not name:
+        raise RuntimeError(
+            "MEMORY_BANK_NAME is not set — it names the run's memory bank "
+            "({abbr}_{run_ts}.npz), and guessing a shared default would mix runs "
+            "(and embedding spaces). steps/train_verl.py sets it for verl workers; "
+            "orchestrator.run_challenger_phase sets it before the phase-end update."
+        )
+    root = os.environ.get("STORAGE_PATH", "/storage")
+    return f"{root}/memory_bank/{name}.npz"
+
+
+def _embed_model_name() -> str:
+    model = os.environ.get("CHALLENGER_PENALTY_EMBED_MODEL")
+    if not model:
+        raise RuntimeError(
+            "CHALLENGER_PENALTY_EMBED_MODEL is not set — the default lives in "
+            "configs/base.yaml (rewards.challenger.rep_penalty.embed_model) and is "
+            "projected here by verl_entry's bridge (workers) and "
+            "orchestrator.run_challenger_phase (phase-end update); no hardcoded fallback."
+        )
+    return model
+
+
+def check_memory_compat(path: str | None = None) -> None:
+    """Raise if the on-disk bank was written by a different embedder than this
+    run's — vectors from two models share no similarity scale (and usually no
+    dimension), so every PMAP score against a mixed bank is garbage. Called by
+    the orchestrator before any trainer spins up, and by every bank read/write."""
+    path = path or memory_path()
+    if not os.path.exists(path):
+        return
+    with np.load(path) as z:
+        stored = str(z["model"]) if "model" in z.files else None
+    current = _embed_model_name()
+    if stored != current:
+        raise RuntimeError(
+            f"memory bank {path} was written by embedder "
+            f"{stored or 'unknown (bank predates the model tag)'} but this run embeds "
+            f"with {current} — delete the bank or configure the matching embed_model."
+        )
+
+
+def _save_bank(path: str, emb: np.ndarray) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    np.savez(path, emb=emb, model=np.array(_embed_model_name()))
+
+
+def _get_embedder():
+    global _embedder
+    if _embedder is None:
+        from sentence_transformers import SentenceTransformer
+        _embedder = SentenceTransformer(_embed_model_name(), device="cpu",
+                                        tokenizer_kwargs={"padding_side": "left"})
+    return _embedder
+
+
+def embed(queries: list[str]) -> np.ndarray:
+    return _get_embedder().encode(queries, normalize_embeddings=True,
+                                  show_progress_bar=False)
+
+
+def _load_memory() -> np.ndarray | None:
+    global _memory, _memory_loaded
+    if not _memory_loaded:
+        _memory_loaded = True
+        path = memory_path()
+        if os.path.exists(path):
+            check_memory_compat(path)
+            _memory = np.load(path)["emb"]
+            print(f"[rdiverse] memory bank loaded: {_memory.shape[0]} entries ({path})", flush=True)
+        else:
+            print(f"[rdiverse] no memory bank yet ({path}) — PMAP inactive this phase", flush=True)
+    return _memory
+
+
+def compute_penalties(queries: list[str], batch_total: int) -> list[dict]:
+    """Per valid query: {prep, p_max, p_mean, pmap, penalty}. Order-aligned
+    with `queries`; `batch_total` is the full rollout batch size |B|
+    (invalid rollouts count toward the denominator but join no cluster)."""
+    if not queries:
+        return []
+    t = _cfg("CHALLENGER_PENALTY_CLUSTER_T", 0.72)
+    lam = _cfg("CHALLENGER_PENALTY_LAMBDA", 0.5)
+    tau_max = _cfg("CHALLENGER_PENALTY_TAU_MAX", 0.47)
+    tau_mean = _cfg("CHALLENGER_PENALTY_TAU_MEAN", 0.2)
+    alpha = _cfg("CHALLENGER_PENALTY_ALPHA", 1.0)
+    beta = _cfg("CHALLENGER_PENALTY_BETA", 1.0)
+
+    emb = embed(queries)
+    n = len(queries)
+
+    # Prep: connected components at cosine >= t
+    parent = list(range(n))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    sims = emb @ emb.T
+    for i in range(n):
+        for j in range(i + 1, n):
+            if sims[i, j] >= t:
+                ra, rb = find(i), find(j)
+                if ra != rb:
+                    parent[ra] = rb
+    csize: dict[int, int] = {}
+    for i in range(n):
+        r = find(i)
+        csize[r] = csize.get(r, 0) + 1
+
+    M = _load_memory()
+    out = []
+    for i in range(n):
+        prep = csize[find(i)] / max(1, batch_total)
+        if M is not None and len(M):
+            s = M @ emb[i]
+            p_max, p_mean = float(s.max()), float(s.mean())
+        else:
+            p_max = p_mean = 0.0
+        pmap = lam * max(0.0, p_max - tau_max) + (1 - lam) * max(0.0, p_mean - tau_mean)
+        out.append({"prep": prep, "p_max": p_max, "p_mean": p_mean, "pmap": pmap,
+                    "penalty": alpha * prep + beta * pmap})
+
+    if os.environ.get("CHALLENGER_PENALTY_MEMORY_UPDATE", "phase") == "step":
+        # per-step memory: this batch's queries join M immediately, closing
+        # the within-phase cross-step blind window (deviation from the
+        # paper's end-of-iteration update, Eq. 6)
+        global _memory
+        _memory = emb if M is None or not len(M) else np.vstack([M, emb])
+        path = memory_path()
+        _save_bank(path, _memory)
+        print(f"[rdiverse] memory +{n} (per-step) -> {_memory.shape[0]}", flush=True)
+    return out
+
+
+def append_memory(queries: list[str], path: str | None = None) -> int:
+    """Fold a completed phase's valid queries into the bank. Returns new size.
+    Also refreshes this process's cached bank so a later compute_penalties()
+    in the same process sees the update (the reward path normally runs in a
+    fresh verl worker per phase, but don't depend on that)."""
+    global _memory, _memory_loaded
+    path = path or memory_path()
+    emb = embed(queries)
+    if os.path.exists(path):
+        check_memory_compat(path)
+        emb = np.vstack([np.load(path)["emb"], emb])
+    _save_bank(path, emb)
+    if path == memory_path():
+        _memory, _memory_loaded = emb, True
+    return emb.shape[0]

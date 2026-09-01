@@ -103,9 +103,35 @@ class RewardSelector:
 
 
 @dataclass
+class ChallengerPenaltyConfig:
+    """R-Diverse penalties (arXiv:2602.13103) for the challenger reward —
+    see rewards/rdiverse_penalty.py. phi is a text embedder (no SAM code
+    pipeline): the same Qwen3-Embedding-4B the eval duplicate detector uses,
+    with the paper's hinge tolerances quantile-mapped into its similarity
+    scale (provenance in the module docstring)."""
+    enabled: bool = False
+    alpha: float = 1.0            # weight of Prep (within-batch cluster share)
+    beta: float = 1.0             # weight of PMAP (memory-bank similarity)
+    lam: float = 0.5              # PMAP mix of max- vs mean-similarity terms
+    tau_max: float = 0.47         # paper's 0.5, mapped to the Qwen sim scale
+    tau_mean: float = 0.2         # paper's 0.25, mapped to the Qwen sim scale
+    cluster_threshold: float = 0.72  # eval detector's blind-calibrated duplicate bar
+    embed_model: Optional[str] = None  # default lives in base.yaml only (single source); validated non-empty at load
+    # "phase" = paper's Eq. 6 (bank frozen during a phase, folded in after);
+    # "step"  = bank grows every step, so PMAP also sees within-phase history
+    memory_update: str = "phase"
+
+
+@dataclass
+class ChallengerRewardSelector(RewardSelector):
+    type: str = "uncertainty"
+    rep_penalty: ChallengerPenaltyConfig = field(default_factory=ChallengerPenaltyConfig)
+
+
+@dataclass
 class RewardsConfig:
     solver: RewardSelector = field(default_factory=lambda: RewardSelector(type="rank"))
-    challenger: RewardSelector = field(default_factory=lambda: RewardSelector(type="uncertainty"))
+    challenger: ChallengerRewardSelector = field(default_factory=ChallengerRewardSelector)
 
 
 @dataclass
@@ -152,6 +178,11 @@ def _validate(config: ExperimentConfig) -> None:
     if config.rewards.challenger.type not in VALID_CHALLENGER_REWARDS:
         errors.append(
             f"rewards.challenger.type={config.rewards.challenger.type!r} must be one of {VALID_CHALLENGER_REWARDS}"
+        )
+    if not config.rewards.challenger.rep_penalty.embed_model:
+        errors.append(
+            "rewards.challenger.rep_penalty.embed_model is required — base.yaml carries the default; "
+            "don't blank it out (the R-Diverse taus are calibrated to that embedder)"
         )
 
     if errors:

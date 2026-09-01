@@ -167,6 +167,7 @@ def launch_training(
     env["EXPERIMENT_CONFIG_PATH"] = str(resolved_config_path)
     env["VERL_EXPERIMENT_NAME"] = paths.save_name(role)
     env["COEVOLVE_ITERATION"] = str(paths.iteration)
+    env["MEMORY_BANK_NAME"] = paths.run_name  # rdiverse_penalty.memory_path()
     env.setdefault("WANDB_MODE", "disabled")
 
     cmd = [sys.executable, "-m", "verl.trainer.main", f"config={verl_config_path}"]
