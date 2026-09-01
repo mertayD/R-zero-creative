@@ -58,9 +58,16 @@ class RunPaths:
     # Every other path method is built from `iter_abbr` or `save_name`, so
     # get these two right and the rest follow.
     @property
+    def run_name(self) -> str:
+        """Run-level name, constant across iterations, e.g.
+        `qwen3-4b-coevolve_20260805_120000`. Keys run-scoped state like the
+        R-Diverse memory bank (rewards/rdiverse_penalty.py)."""
+        return f"{self.abbr}_{self.run_ts}"
+
+    @property
     def iter_abbr(self) -> str:
         """Per-iteration run name, e.g. `qwen3-4b-coevolve_20260805_120000_iter1`."""
-        return f"{self.abbr}_{self.run_ts}_iter{self.iteration}"
+        return f"{self.run_name}_iter{self.iteration}"
 
     def save_name(self, role: str) -> str:
         """VERL `trainer.experiment_name` / checkpoint directory name for `role`.

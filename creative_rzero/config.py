@@ -116,7 +116,7 @@ class ChallengerPenaltyConfig:
     tau_max: float = 0.47         # paper's 0.5, mapped to the Qwen sim scale
     tau_mean: float = 0.2         # paper's 0.25, mapped to the Qwen sim scale
     cluster_threshold: float = 0.72  # eval detector's blind-calibrated duplicate bar
-    embed_model: str = "Qwen/Qwen3-Embedding-4B"
+    embed_model: Optional[str] = None  # default lives in base.yaml only (single source); validated non-empty at load
     # "phase" = paper's Eq. 6 (bank frozen during a phase, folded in after);
     # "step"  = bank grows every step, so PMAP also sees within-phase history
     memory_update: str = "phase"
@@ -178,6 +178,11 @@ def _validate(config: ExperimentConfig) -> None:
     if config.rewards.challenger.type not in VALID_CHALLENGER_REWARDS:
         errors.append(
             f"rewards.challenger.type={config.rewards.challenger.type!r} must be one of {VALID_CHALLENGER_REWARDS}"
+        )
+    if not config.rewards.challenger.rep_penalty.embed_model:
+        errors.append(
+            "rewards.challenger.rep_penalty.embed_model is required — base.yaml carries the default; "
+            "don't blank it out (the R-Diverse taus are calibrated to that embedder)"
         )
 
     if errors:

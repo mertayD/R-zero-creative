@@ -321,6 +321,15 @@ def run_challenger_phase(cfg: ExperimentConfig, paths: RunPaths) -> str:
 
     build_challenger_parquet(cfg, paths)
 
+    if cfg.rewards.challenger.rep_penalty.enabled:
+        # Pin the bank identity and embedder in THIS process before any trainer
+        # spins up: memory_path() refuses to guess (no "default" bank), and a
+        # bank left by a different embedder must fail here, not mid-phase.
+        from creative_rzero.rewards import rdiverse_penalty
+        os.environ["MEMORY_BANK_NAME"] = paths.run_name
+        os.environ["CHALLENGER_PENALTY_EMBED_MODEL"] = cfg.rewards.challenger.rep_penalty.embed_model
+        rdiverse_penalty.check_memory_compat()
+
     os.environ["CUDA_VISIBLE_DEVICES"] = training_gpu_ids(cfg)  # forwarded by launch_training
     with solver_server(cfg.solver.model_path, cfg.challenger.solver_query.port, aux_gpu_id(cfg)):
         launch_training(cfg, paths, "challenger", run_dir)

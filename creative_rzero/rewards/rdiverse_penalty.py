@@ -33,7 +33,6 @@ seconds per step, small next to the judge pass.
 from __future__ import annotations
 
 import os
-import re
 
 import numpy as np
 
@@ -51,20 +50,60 @@ def _cfg(name: str, default: float) -> float:
 
 
 def memory_path() -> str:
-    """One bank per coevolve run family, shared across its iterations."""
-    exp = os.environ.get("VERL_EXPERIMENT_NAME", "default")
-    family = re.sub(r"_iter\d+_.*$", "", exp)
+    """One bank per run ({abbr}_{run_ts}.npz), shared across its iterations."""
+    name = os.environ.get("MEMORY_BANK_NAME")
+    if not name:
+        raise RuntimeError(
+            "MEMORY_BANK_NAME is not set — it names the run's memory bank "
+            "({abbr}_{run_ts}.npz), and guessing a shared default would mix runs "
+            "(and embedding spaces). steps/train_verl.py sets it for verl workers; "
+            "orchestrator.run_challenger_phase sets it before the phase-end update."
+        )
     root = os.environ.get("STORAGE_PATH", "/storage")
-    return f"{root}/memory_bank/{family}.npz"
+    return f"{root}/memory_bank/{name}.npz"
+
+
+def _embed_model_name() -> str:
+    model = os.environ.get("CHALLENGER_PENALTY_EMBED_MODEL")
+    if not model:
+        raise RuntimeError(
+            "CHALLENGER_PENALTY_EMBED_MODEL is not set — the default lives in "
+            "configs/base.yaml (rewards.challenger.rep_penalty.embed_model) and is "
+            "projected here by verl_entry's bridge (workers) and "
+            "orchestrator.run_challenger_phase (phase-end update); no hardcoded fallback."
+        )
+    return model
+
+
+def check_memory_compat(path: str | None = None) -> None:
+    """Raise if the on-disk bank was written by a different embedder than this
+    run's — vectors from two models share no similarity scale (and usually no
+    dimension), so every PMAP score against a mixed bank is garbage. Called by
+    the orchestrator before any trainer spins up, and by every bank read/write."""
+    path = path or memory_path()
+    if not os.path.exists(path):
+        return
+    with np.load(path) as z:
+        stored = str(z["model"]) if "model" in z.files else None
+    current = _embed_model_name()
+    if stored != current:
+        raise RuntimeError(
+            f"memory bank {path} was written by embedder "
+            f"{stored or 'unknown (bank predates the model tag)'} but this run embeds "
+            f"with {current} — delete the bank or configure the matching embed_model."
+        )
+
+
+def _save_bank(path: str, emb: np.ndarray) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    np.savez(path, emb=emb, model=np.array(_embed_model_name()))
 
 
 def _get_embedder():
     global _embedder
     if _embedder is None:
         from sentence_transformers import SentenceTransformer
-        model = os.environ.get("CHALLENGER_PENALTY_EMBED_MODEL",
-                               "Qwen/Qwen3-Embedding-4B")
-        _embedder = SentenceTransformer(model, device="cpu",
+        _embedder = SentenceTransformer(_embed_model_name(), device="cpu",
                                         tokenizer_kwargs={"padding_side": "left"})
     return _embedder
 
@@ -80,6 +119,7 @@ def _load_memory() -> np.ndarray | None:
         _memory_loaded = True
         path = memory_path()
         if os.path.exists(path):
+            check_memory_compat(path)
             _memory = np.load(path)["emb"]
             print(f"[rdiverse] memory bank loaded: {_memory.shape[0]} entries ({path})", flush=True)
         else:
@@ -144,8 +184,7 @@ def compute_penalties(queries: list[str], batch_total: int) -> list[dict]:
         global _memory
         _memory = emb if M is None or not len(M) else np.vstack([M, emb])
         path = memory_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        np.savez(path, emb=_memory)
+        _save_bank(path, _memory)
         print(f"[rdiverse] memory +{n} (per-step) -> {_memory.shape[0]}", flush=True)
     return out
 
@@ -157,11 +196,11 @@ def append_memory(queries: list[str], path: str | None = None) -> int:
     fresh verl worker per phase, but don't depend on that)."""
     global _memory, _memory_loaded
     path = path or memory_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     emb = embed(queries)
     if os.path.exists(path):
+        check_memory_compat(path)
         emb = np.vstack([np.load(path)["emb"], emb])
-    np.savez(path, emb=emb)
+    _save_bank(path, emb)
     if path == memory_path():
         _memory, _memory_loaded = emb, True
     return emb.shape[0]

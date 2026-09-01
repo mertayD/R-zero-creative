@@ -18,7 +18,8 @@ from creative_rzero.rewards import rdiverse_penalty  # noqa: E402
 def clean_env(monkeypatch):
     for var in ("CHALLENGER_PENALTY_ENABLED", "CHALLENGER_PENALTY_ALPHA", "CHALLENGER_PENALTY_BETA",
                 "CHALLENGER_PENALTY_LAMBDA", "CHALLENGER_PENALTY_TAU_MAX",
-                "CHALLENGER_PENALTY_TAU_MEAN", "CHALLENGER_PENALTY_CLUSTER_T"):
+                "CHALLENGER_PENALTY_TAU_MEAN", "CHALLENGER_PENALTY_CLUSTER_T",
+                "CHALLENGER_PENALTY_EMBED_MODEL", "MEMORY_BANK_NAME"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -86,8 +87,9 @@ def test_step_memory_mode_grows_bank_within_phase(monkeypatch, tmp_path):
     """memory_update=step: a batch joins the bank immediately, so the next
     batch in the same phase is penalized for repeating it."""
     monkeypatch.setenv("CHALLENGER_PENALTY_MEMORY_UPDATE", "step")
+    monkeypatch.setenv("CHALLENGER_PENALTY_EMBED_MODEL", "stub-embedder")
     monkeypatch.setenv("STORAGE_PATH", str(tmp_path))
-    monkeypatch.setenv("VERL_EXPERIMENT_NAME", "steptest_iter1_x")
+    monkeypatch.setenv("MEMORY_BANK_NAME", "steptest")
     monkeypatch.setattr(rdiverse_penalty, "embed", lambda qs: _one_hot(4, *([0] * len(qs))))
     monkeypatch.setattr(rdiverse_penalty, "_memory", None)
     monkeypatch.setattr(rdiverse_penalty, "_memory_loaded", False)
@@ -101,7 +103,43 @@ def test_step_memory_mode_grows_bank_within_phase(monkeypatch, tmp_path):
     assert (tmp_path / "memory_bank" / "steptest.npz").exists()
 
 
-def test_memory_path_strips_iteration_suffix(monkeypatch):
-    monkeypatch.setenv("VERL_EXPERIMENT_NAME", "dup-dynamics_iter2_challenger")
+def test_memory_path_is_bank_name_under_storage(monkeypatch):
+    monkeypatch.setenv("MEMORY_BANK_NAME", "dup-dynamics_20260901_000000")
     monkeypatch.setenv("STORAGE_PATH", "/storage")
-    assert rdiverse_penalty.memory_path() == "/storage/memory_bank/dup-dynamics.npz"
+    assert rdiverse_penalty.memory_path() == "/storage/memory_bank/dup-dynamics_20260901_000000.npz"
+
+
+def test_memory_path_refuses_to_fall_back(monkeypatch):
+    monkeypatch.delenv("MEMORY_BANK_NAME", raising=False)
+    with pytest.raises(RuntimeError, match="MEMORY_BANK_NAME"):
+        rdiverse_penalty.memory_path()
+
+
+def test_bank_from_other_embedder_is_rejected(monkeypatch, tmp_path):
+    """A bank written under one embed model must not be read or appended to
+    under another (the vectors share no space — the default.npz incident)."""
+    monkeypatch.setenv("STORAGE_PATH", str(tmp_path))
+    monkeypatch.setenv("MEMORY_BANK_NAME", "mix_20260901_000000")
+    monkeypatch.setattr(rdiverse_penalty, "embed", lambda qs: _one_hot(4, *([0] * len(qs))))
+    monkeypatch.setattr(rdiverse_penalty, "_memory", None)
+    monkeypatch.setattr(rdiverse_penalty, "_memory_loaded", False)
+
+    monkeypatch.setenv("CHALLENGER_PENALTY_EMBED_MODEL", "model-a")
+    assert rdiverse_penalty.append_memory(["q1"]) == 1
+
+    monkeypatch.setenv("CHALLENGER_PENALTY_EMBED_MODEL", "model-b")
+    with pytest.raises(RuntimeError, match="model-a"):
+        rdiverse_penalty.append_memory(["q2"])
+    with pytest.raises(RuntimeError, match="model-a"):
+        rdiverse_penalty.check_memory_compat()
+
+
+def test_untagged_legacy_bank_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv("STORAGE_PATH", str(tmp_path))
+    monkeypatch.setenv("MEMORY_BANK_NAME", "legacy")
+    monkeypatch.setenv("CHALLENGER_PENALTY_EMBED_MODEL", "stub-embedder")
+    path = tmp_path / "memory_bank" / "legacy.npz"
+    path.parent.mkdir()
+    np.savez(path, emb=_one_hot(4, 0))  # pre-model-tag format
+    with pytest.raises(RuntimeError, match="predates the model tag"):
+        rdiverse_penalty.check_memory_compat()
