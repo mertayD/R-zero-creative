@@ -26,6 +26,7 @@ class RolloutConfig:
     temperature: float = 1.0
     top_p: float = 1.0
     top_k: int = -1
+    min_p: float = 0.0
     seed: int = 1
     limit_images: int = 0
     dtype: str = "bf16"

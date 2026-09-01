@@ -20,6 +20,13 @@ from creative_rzero.failure_reasons import FormatFailureReason
 
 logger = logging.getLogger(__name__)
 
+# Forced assistant prefix for challenger training rollouts: generation starts
+# inside the fenced JSON, which removes the free-form opening tokens where
+# 4B-Base degenerates (garbage prefixes / role-token leaks / prompt echo).
+# The rollout prompt appends it (data.response_prefill) and the reward caller
+# prepends it back before validation, so parsed text is a complete document.
+CHALLENGER_PREFILL = "```json\n{"
+
 _CJK_RE = re.compile(r'[一-鿿㐀-䶿豈-﫿\U00020000-\U0002a6df]')
 
 

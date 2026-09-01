@@ -29,6 +29,7 @@ from omegaconf import OmegaConf
 
 from creative_rzero.config import ExperimentConfig, save_resolved
 from creative_rzero.paths import RunPaths
+from creative_rzero.utils import CHALLENGER_PREFILL
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -110,6 +111,8 @@ def materialize_verl_config(
     data["rollout_batch_size"] = role_cfg.num_train
     data["val_batch_size"] = role_cfg.num_val
     data["seed"] = cfg.run.seed
+    if role == "challenger" and getattr(role_cfg, "prefill", False):
+        data["response_prefill"] = CHALLENGER_PREFILL
 
     verl_cfg["worker"]["actor"]["model"]["model_path"] = role_cfg.model_path
     verl_cfg["worker"]["actor"]["global_batch_size"] = role_cfg.num_train

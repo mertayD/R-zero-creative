@@ -48,6 +48,10 @@ class DataConfig:
     # building — e.g. {"enable_thinking": true} for Qwen3. Matches upstream
     # veRL's data.apply_chat_template_kwargs interface.
     apply_chat_template_kwargs: dict = field(default_factory=dict)
+    # Text appended after the chat template's generation prompt, so rollouts
+    # start inside a forced assistant prefix (e.g. "```json\n{" for the
+    # challenger). The reward caller must prepend the same text before parsing.
+    response_prefill: Optional[str] = None
     shuffle: bool = True
     seed: int = 1
     max_pixels: int = 4194304

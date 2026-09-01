@@ -97,6 +97,7 @@ class RLHFDataset(Dataset):
         filter_overlong_prompts: bool = True,
         max_samples: Optional[int] = None,
         apply_chat_template_kwargs: Optional[Dict[str, Any]] = None,
+        response_prefill: Optional[str] = None,
     ):
         self.tokenizer = tokenizer
         self.processor = processor
@@ -110,6 +111,9 @@ class RLHFDataset(Dataset):
         self.filter_overlong_prompts = filter_overlong_prompts
         # Extra kwargs forwarded to apply_chat_template (e.g. enable_thinking).
         self.apply_chat_template_kwargs = apply_chat_template_kwargs or {}
+        # Forced assistant prefix appended after the generation prompt, so the
+        # model's first sampled token continues from inside it.
+        self.response_prefill = response_prefill or ""
 
         if "@" in data_path:
             data_path, data_split = data_path.split("@")
@@ -233,13 +237,14 @@ class RLHFDataset(Dataset):
     def _filter_overlong_prompts(self, example: Dict[str, Any]) -> bool:
         messages = self._build_messages(example)
         processing_class = self.processor if self.processor is not None else self.tokenizer
+        prefill_len = len(self.tokenizer.encode(self.response_prefill, add_special_tokens=False)) if self.response_prefill else 0
         if self.tokenizer.chat_template:
             return (
-                len(processing_class.apply_chat_template(messages, add_generation_prompt=True, **self._safe_chat_template_kwargs())) <= self.max_prompt_length
+                len(processing_class.apply_chat_template(messages, add_generation_prompt=True, **self._safe_chat_template_kwargs())) + prefill_len <= self.max_prompt_length
             )
         else:
             return (
-                len("system: " + messages[0]["content"] + '\n' + "user: " + messages[1]["content"]) <= self.max_prompt_length
+                len("system: " + messages[0]["content"] + '\n' + "user: " + messages[1]["content"]) + len(self.response_prefill) <= self.max_prompt_length
             )
         
 
@@ -252,6 +257,7 @@ class RLHFDataset(Dataset):
 
         if self.image_key in example:
             prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, **self._safe_chat_template_kwargs())
+            prompt += self.response_prefill
             raw_image_data = example.pop(self.image_key)
             images = [
                 process_image(image, min_pixels=self.min_pixels, max_pixels=self.max_pixels)
@@ -266,6 +272,7 @@ class RLHFDataset(Dataset):
                 prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False, **self._safe_chat_template_kwargs())
             else:
                 prompt = "system: " + messages[0]["content"] + '\n' + "user: " + messages[1]["content"]
+            prompt += self.response_prefill
             model_inputs = self.tokenizer([prompt], add_special_tokens=False, return_tensors="pt")
             input_ids = model_inputs.pop("input_ids")[0]
             attention_mask = model_inputs.pop("attention_mask")[0]
