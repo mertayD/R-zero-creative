@@ -28,6 +28,8 @@ is the known upgrade path if higher fidelity is needed.
 
 from __future__ import annotations
 
+from statistics import mean
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -136,3 +138,68 @@ def duplicate_rate(queries: list[str], threshold: float = DEFAULT_SIMILARITY_THR
         flagged.add(i)
         flagged.add(j)
     return len(flagged) / len(queries)
+
+
+def pairwise_bleu_scores(queries: list[str]) -> list[float]:
+    """All ordered-pair (i != j) BLEU-4 scores underlying `self_bleu`, before
+    averaging: query `i` scored as a standard BLEU-4 (1/2/3/4-gram, equal
+    weights 0.25 each) hypothesis against query `j` alone as the single
+    reference. Full BLEU-4 rather than a lower-order variant because the
+    target signal here is shared *templates/scaffolding* (e.g. two queries
+    built from "Generate a detailed outline for a research paper on the
+    impact of X... The outline should include sections for...", only X
+    swapped) — those show up as long verbatim n-gram runs at n=3/4, which a
+    random unrelated pair essentially never shares by chance. Unigram/bigram
+    overlap alone is dominated by common function words ("a", "for", "on
+    the") shared by any two English sentences and would be noise for this
+    purpose. Whitespace tokenization, single-reference-per-pair BLEU matching
+    this repo's existing pairwise-BLEU usage in
+    `examples/reward_function/caller_penalty.py::_bleu_distance_matrix`.
+    O(n^2) BLEU calls — fine at the per-(domain, subdomain)-group scale
+    (~10 replicates) this is run at, per diversity.py's module docstring.
+    Returns [] for fewer than 2 queries (nothing to pair) — exposed
+    separately from `self_bleu`'s mean so callers can histogram the full
+    per-pair distribution instead of just its average."""
+    if len(queries) < 2:
+        return []
+    from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
+
+    smoother = SmoothingFunction().method1
+    tokenized = [q.split() for q in queries]
+    n = len(tokenized)
+    return [
+        sentence_bleu(
+            [tokenized[j]], tokenized[i],
+            weights=(0.25, 0.25, 0.25, 0.25), smoothing_function=smoother,
+        )
+        for i in range(n)
+        for j in range(n)
+        if i != j
+    ]
+
+
+def self_bleu(queries: list[str]) -> float | None:
+    """Pairwise Self-BLEU (mean of `pairwise_bleu_scores`): higher means the
+    group's queries are more mutually similar in phrasing (less diverse); 0
+    means no shared n-grams across the group. See `pairwise_bleu_scores` for
+    scoring details. Returns None for fewer than 2 queries."""
+    scores = pairwise_bleu_scores(queries)
+    return mean(scores) if scores else None
+
+
+def all_pairwise_similarities(queries: list[str], method: str = "embedding") -> list[float]:
+    """All `(i < j)` pairwise similarity values for `queries`, unfiltered by
+    any near-duplicate threshold — unlike `near_duplicate_pairs`/
+    `semantic_near_duplicate_pairs`, which only return pairs at-or-above the
+    calibrated threshold, this is meant for histogramming a group's full
+    similarity distribution. `method` is "tfidf" or "embedding", same choice
+    as `add_diversity`'s `dup_method`. Passing `threshold=-1.0` to the
+    underlying pair function is safe here since cosine similarity is always
+    >= -1.0 (embedding) or >= 0.0 (tfidf) — every pair passes. Returns [] for
+    fewer than 2 queries."""
+    pair_fns = {"embedding": semantic_near_duplicate_pairs, "tfidf": near_duplicate_pairs}
+    if method not in pair_fns:
+        raise ValueError(f"all_pairwise_similarities method={method!r} must be one of {sorted(pair_fns)}")
+    if len(queries) < 2:
+        return []
+    return [sim for _, _, sim in pair_fns[method](queries, threshold=-1.0)]

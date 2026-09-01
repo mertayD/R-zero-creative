@@ -9,14 +9,22 @@ if `wandb` is importable and `WANDB_MODE` isn't "disabled"), not required —
 `run()` still returns the summary dict regardless of whether logging fired.
 
 Per-row output schema (one JSON object per line):
-    eval_id, domain, subdomain, replicate_idx,
+    eval_id, domain, subdomain, replicate_idx, guidance_applied,
     format_valid, format_failure_reason,
-    query, query_len, criteria_len,
+    query, query_len, criteria, criteria_len,
     domain_adherence, guidance_adherence, criteria_quality,
     judge_backend, judge_reasoning,
-    near_duplicate, near_duplicate_of, near_duplicate_similarity
+    near_duplicate, near_duplicate_partners, near_duplicate_count,
+    near_duplicate_similarity, group_self_bleu
 Judge/diversity fields are None for format-invalid rows (nothing valid to
-judge or compare).
+judge or compare); `criteria` is also None there. `near_duplicate_partners`
+lists the eval_ids of every other row this one is flagged as a near-duplicate
+of (not just the closest one), and `near_duplicate_count` is that list's
+length — both 0/[] rather than None for format-valid rows with no matches.
+`group_self_bleu` is a group-level Self-BLEU score (see diversity.py's
+`self_bleu`) repeated across every row in the row's (domain, subdomain)
+group — a lexical-diversity read on the whole group, independent of the
+`near_duplicate*` threshold-based fields.
 
 `vllm`/`transformers` are imported lazily inside `_load_model`/`_generate`,
 mirroring generate_prompts.py::run_generation, so importing this module (for
@@ -30,7 +38,9 @@ import json
 import os
 import sys
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from statistics import mean
 
 from tqdm import tqdm
 
@@ -41,7 +51,10 @@ if str(_REPO_ROOT) not in sys.path:
 from creative_rzero.eval.challenger import challenger_judge_agent  # noqa: E402
 from creative_rzero.eval.challenger.aggregate import aggregate_rows  # noqa: E402
 from creative_rzero.eval.challenger.diversity import (  # noqa: E402
+    DEFAULT_SIMILARITY_THRESHOLD,
+    EMBEDDING_SIMILARITY_THRESHOLD,
     near_duplicate_pairs,
+    pairwise_bleu_scores,
     semantic_near_duplicate_pairs,
 )
 from creative_rzero.steps.generate_prompts import validate_one_shot_response  # noqa: E402
@@ -128,23 +141,62 @@ def _generate(llm, tokenizer, rows: list[dict]) -> list[str]:
     return [c.outputs[0].text for c in completions]
 
 
-def score_rows(rows: list[dict], responses: list[str], agent, judge_retries: int = 3) -> list[dict]:
+def _judge_one(agent, row: dict, query: str, criteria: list[dict], judge_retries: int) -> dict:
+    """Run a single judge call and normalize both outcomes (parsed result or
+    `JudgeParseError`) into the record-field subset `score_rows` merges in —
+    lets the parallel map in `score_rows` stay a plain dict update with no
+    per-future exception handling of its own."""
+    try:
+        judged = challenger_judge_agent.score_generated_prompt(
+            agent,
+            domain_name=row["domain_name"],
+            subdomain=row["subdomain"],
+            guidance_applied=row["guidance_applied"],
+            query=query,
+            criteria=criteria,
+            max_retries=judge_retries,
+        )
+        return {
+            "domain_adherence": judged["domain_adherence"],
+            "guidance_adherence": judged["guidance_adherence"],
+            "criteria_quality": judged["criteria_quality"],
+            "judge_backend": judged["judge_backend"],
+            "judge_reasoning": judged["reasoning"],
+        }
+    except challenger_judge_agent.JudgeParseError as e:
+        return {"judge_backend": "error", "judge_reasoning": str(e)}
+
+
+def score_rows(
+    rows: list[dict],
+    responses: list[str],
+    agent,
+    judge_retries: int = 3,
+    judge_workers: int = 8,
+) -> list[dict]:
     """Format-validate each response (reusing validate_one_shot_response
     unchanged) and, for format-valid rows, run one judge call for
-    domain/guidance/criteria-quality. Does not add `near_duplicate` — that's
-    a batch-level pass over the whole run, see `add_diversity`."""
+    domain/guidance/criteria-quality. Judge calls are network-bound (a Claude
+    API request per row) and independent of each other, so they run
+    concurrently across a `ThreadPoolExecutor` of `judge_workers` threads
+    rather than one at a time; format validation itself stays sequential
+    since it's cheap local parsing. Does not add `near_duplicate` — that's a
+    batch-level pass over the whole run, see `add_diversity`."""
     scored = []
-    for row, response in tqdm(list(zip(rows, responses)), desc="Scoring rows"):
+    judge_jobs: list[tuple[int, dict, str, list[dict]]] = []
+    for row, response in zip(rows, responses):
         is_valid, parsed, _thinking, fmt_reason = validate_one_shot_response(response)
         record = {
             "eval_id": row["eval_id"],
             "domain": row["domain"],
             "subdomain": row["subdomain"],
             "replicate_idx": row["replicate_idx"],
+            "guidance_applied": row["guidance_applied"],
             "format_valid": is_valid,
             "format_failure_reason": fmt_reason,
             "query": "",
             "query_len": 0,
+            "criteria": None,
             "criteria_len": 0,
             "domain_adherence": None,
             "guidance_adherence": None,
@@ -157,67 +209,92 @@ def score_rows(rows: list[dict], responses: list[str], agent, judge_retries: int
             criteria = parsed.get("criteria", [])
             record["query"] = query
             record["query_len"] = len(query)
+            record["criteria"] = criteria
             record["criteria_len"] = len(json.dumps(criteria))
-            try:
-                judged = challenger_judge_agent.score_generated_prompt(
-                    agent,
-                    domain_name=row["domain_name"],
-                    subdomain=row["subdomain"],
-                    guidance_applied=row["guidance_applied"],
-                    query=query,
-                    criteria=criteria,
-                    max_retries=judge_retries,
-                )
-                record["domain_adherence"] = judged["domain_adherence"]
-                record["guidance_adherence"] = judged["guidance_adherence"]
-                record["criteria_quality"] = judged["criteria_quality"]
-                record["judge_backend"] = judged["judge_backend"]
-                record["judge_reasoning"] = judged["reasoning"]
-            except challenger_judge_agent.JudgeParseError as e:
-                record["judge_backend"] = "error"
-                record["judge_reasoning"] = str(e)
+            judge_jobs.append((len(scored), row, query, criteria))
         scored.append(record)
+
+    if judge_jobs:
+        with ThreadPoolExecutor(max_workers=judge_workers) as pool:
+            futures = {
+                pool.submit(_judge_one, agent, row, query, criteria, judge_retries): idx
+                for idx, row, query, criteria in judge_jobs
+            }
+            for future in tqdm(as_completed(futures), desc="Scoring rows (judge)", total=len(futures)):
+                scored[futures[future]].update(future.result())
+
     return scored
 
 
-def add_diversity(scored: list[dict], method: str = "embedding") -> None:
-    """Mutates `scored` in place, adding `near_duplicate`, `near_duplicate_of`
-    (the eval_id of the closest flagged partner), and
-    `near_duplicate_similarity` (cosine to that partner — how strong the
-    match is; borderline near the method's threshold, verbatim-level toward
-    1.0) to every row. `method` picks the detector: "embedding"
+def add_diversity(
+    scored: list[dict], method: str = "embedding"
+) -> dict[tuple[str, str], dict[str, list[float]]]:
+    """Mutates `scored` in place, adding `near_duplicate`,
+    `near_duplicate_partners` (eval_ids of *every* other row this one is
+    flagged against, not just the closest one), `near_duplicate_count`
+    (that list's length), `near_duplicate_similarity` (cosine to the
+    strongest match — how strong the match is; borderline near the method's
+    threshold, verbatim-level toward 1.0), and `group_self_bleu` (Self-BLEU
+    of the row's whole (domain, subdomain) group — see diversity.py's
+    `self_bleu` docstring; same value repeated on every row in the group,
+    since it's a group-level lexical-diversity stat, not a per-row one) to
+    every row. `method` picks the near-duplicate detector: "embedding"
     (Qwen3-Embedding-4B cosine, the default — catches reworded same-task
     duplicates) or "tfidf" (lexical, no model download, the pre-existing
-    layer). Grouped by (domain, subdomain) — see diversity.py's module
-    docstring for why the comparison is per-group rather than across the
-    whole run. Format-invalid rows (no `query` to compare) get None for all
-    three."""
+    layer); it does not affect `group_self_bleu`, which is always lexical.
+    Grouped by (domain, subdomain) — see diversity.py's module docstring for
+    why the comparison is per-group rather than across the whole run.
+    Format-invalid rows (no `query` to compare) get None for all five.
+
+    Returns `{(domain, subdomain): {"cosine_similarities": [...], "bleu_scores":
+    [...]}}` — every pairwise value computed for that group (not just the
+    ones at-or-above the near-duplicate threshold), for callers that want to
+    look at a group's full similarity distribution (e.g. a histogram) rather
+    than just the flagged pairs and the Self-BLEU mean."""
     pair_fns = {"embedding": semantic_near_duplicate_pairs, "tfidf": near_duplicate_pairs}
     if method not in pair_fns:
         raise ValueError(f"add_diversity method={method!r} must be one of {sorted(pair_fns)}")
     pair_fn = pair_fns[method]
+    threshold = {"embedding": EMBEDDING_SIMILARITY_THRESHOLD, "tfidf": DEFAULT_SIMILARITY_THRESHOLD}[method]
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in scored:
         r["near_duplicate"] = None
-        r["near_duplicate_of"] = None
+        r["near_duplicate_partners"] = None
+        r["near_duplicate_count"] = None
         r["near_duplicate_similarity"] = None
+        r["group_self_bleu"] = None
         if r["format_valid"]:
             groups[(r["domain"], r["subdomain"])].append(r)
 
-    for group_rows in tqdm(list(groups.values()), desc="Diversity groups"):
+    group_histograms: dict[tuple[str, str], dict[str, list[float]]] = {}
+    for group_key, group_rows in tqdm(list(groups.items()), desc="Diversity groups"):
         queries = [r["query"] for r in group_rows]
-        closest: dict[int, tuple[float, int]] = {}
-        for i, j, sim in pair_fn(queries):
-            if sim > closest.get(i, (-1.0, -1))[0]:
-                closest[i] = (sim, j)
-            if sim > closest.get(j, (-1.0, -1))[0]:
-                closest[j] = (sim, i)
+        # threshold=-1.0 pulls every pairwise similarity in one pass (below both
+        # methods' possible ranges), so near-duplicate flagging and the
+        # histogram data below share a single embedding-encode/TF-IDF-fit call
+        # instead of computing the same similarities twice.
+        all_pairs = pair_fn(queries, threshold=-1.0)
+        matches: dict[int, list[tuple[int, float]]] = defaultdict(list)
+        for i, j, sim in all_pairs:
+            if sim >= threshold:
+                matches[i].append((j, sim))
+                matches[j].append((i, sim))
+        bleu_scores = pairwise_bleu_scores(queries)
+        group_bleu = mean(bleu_scores) if bleu_scores else None
+        group_histograms[group_key] = {
+            "cosine_similarities": [sim for _, _, sim in all_pairs],
+            "bleu_scores": bleu_scores,
+        }
         for idx, r in enumerate(group_rows):
-            r["near_duplicate"] = idx in closest
-            if idx in closest:
-                sim, partner = closest[idx]
-                r["near_duplicate_of"] = group_rows[partner]["eval_id"]
-                r["near_duplicate_similarity"] = round(sim, 3)
+            row_matches = matches.get(idx, [])
+            r["near_duplicate"] = bool(row_matches)
+            r["near_duplicate_partners"] = [group_rows[j]["eval_id"] for j, _ in row_matches]
+            r["near_duplicate_count"] = len(row_matches)
+            r["near_duplicate_similarity"] = (
+                round(max(sim for _, sim in row_matches), 3) if row_matches else None
+            )
+            r["group_self_bleu"] = round(group_bleu, 3) if group_bleu is not None else None
+    return group_histograms
 
 
 def _wandb_active() -> bool:
@@ -261,24 +338,76 @@ def _by_subdomain_table(summary: dict):
 
 def _rows_table(scored: list[dict]):
     columns = [
-        "eval_id", "domain", "subdomain", "replicate_idx", "format_valid",
+        "eval_id", "domain", "subdomain", "replicate_idx", "guidance_applied", "format_valid",
         "format_failure_reason", "domain_adherence", "guidance_adherence",
-        "criteria_quality", "judge_backend", "near_duplicate", "near_duplicate_of",
-        "near_duplicate_similarity", "query_preview",
+        "criteria_quality", "judge_backend", "near_duplicate", "near_duplicate_partners",
+        "near_duplicate_count", "near_duplicate_similarity", "group_self_bleu", "query", "criteria",
     ]
     table = _wandb.Table(columns=columns)
     for r in scored:
         table.add_data(
-            r["eval_id"], r["domain"], r["subdomain"], r["replicate_idx"], r["format_valid"],
-            r["format_failure_reason"], r["domain_adherence"], r["guidance_adherence"],
-            r["criteria_quality"], r["judge_backend"], r["near_duplicate"],
-            r["near_duplicate_of"], r["near_duplicate_similarity"], r["query"][:200],
+            r["eval_id"], r["domain"], r["subdomain"], r["replicate_idx"],
+            "; ".join(r["guidance_applied"]) if r["guidance_applied"] else "",
+            r["format_valid"], r["format_failure_reason"], r["domain_adherence"],
+            r["guidance_adherence"], r["criteria_quality"], r["judge_backend"],
+            r["near_duplicate"],
+            "; ".join(r["near_duplicate_partners"]) if r["near_duplicate_partners"] else "",
+            r["near_duplicate_count"], r["near_duplicate_similarity"], r["group_self_bleu"],
+            r["query"], json.dumps(r["criteria"]) if r["criteria"] is not None else "",
+        )
+    return table
+
+
+def _histogram_image(values: list[float], title: str):
+    """Render `values` as a small matplotlib histogram and wrap it as a
+    `wandb.Image` — lazily imports matplotlib (Agg backend, headless) since
+    it's only needed on this W&B-logging path, mirroring the
+    vllm/transformers/sentence-transformers lazy-import pattern used
+    elsewhere in this module. Renders an empty axes (no error) for an empty
+    `values` list, e.g. a group with fewer than 2 valid rows."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(3, 2))
+    ax.hist(values, bins=15)
+    ax.set_title(title, fontsize=8)
+    fig.tight_layout()
+    image = _wandb.Image(fig)
+    plt.close(fig)
+    return image
+
+
+def _similarity_histogram_table(group_histograms: dict[tuple[str, str], dict[str, list[float]]]):
+    """One row per (domain, subdomain) group: pairwise cosine-similarity and
+    pairwise Self-BLEU histograms rendered as images, plus each distribution's
+    pair count for context (a group with only 2-3 replicates gives a much
+    noisier histogram than one with 10)."""
+    columns = [
+        "domain", "subdomain", "n_cosine_pairs", "cosine_similarity_hist",
+        "n_bleu_pairs", "self_bleu_hist",
+    ]
+    table = _wandb.Table(columns=columns)
+    for (domain, subdomain), data in sorted(group_histograms.items()):
+        cosine_sims = data["cosine_similarities"]
+        bleu_scores = data["bleu_scores"]
+        table.add_data(
+            domain, subdomain, len(cosine_sims),
+            _histogram_image(cosine_sims, f"{domain}::{subdomain} cosine sim"),
+            len(bleu_scores),
+            _histogram_image(bleu_scores, f"{domain}::{subdomain} self-BLEU"),
         )
     return table
 
 
 def _log_to_wandb(
-    *, model: str, summary: dict, scored: list[dict], step: int | None, wandb_group: str
+    *,
+    model: str,
+    summary: dict,
+    scored: list[dict],
+    group_histograms: dict[tuple[str, str], dict[str, list[float]]],
+    step: int | None,
+    wandb_group: str,
 ) -> None:
     """Log this run's summary + per-row/per-subdomain tables to W&B.
     Attaches to an already-active run (e.g. the orchestrator's, if this is
@@ -302,6 +431,7 @@ def _log_to_wandb(
     metrics = _flatten_summary(summary)
     metrics["challenger_eval/by_subdomain"] = _by_subdomain_table(summary)
     metrics["challenger_eval/rows"] = _rows_table(scored)
+    metrics["challenger_eval/similarity_histograms"] = _similarity_histogram_table(group_histograms)
     _wandb.log(metrics, step=step)
 
     if owned:
@@ -320,6 +450,7 @@ def run(
     step: int | None = None,
     wandb_group: str = "",
     dup_method: str = "embedding",
+    judge_workers: int = 8,
 ) -> dict:
     rows = load_eval_set(dataset_repo, local_path, limit=limit)
 
@@ -341,10 +472,10 @@ def run(
     agent = challenger_judge_agent.get_agent(judge_type)
     print("Initialized Claude Judge Agent")
     print("Scoring rows")
-    scored = score_rows(rows, responses, agent)
+    scored = score_rows(rows, responses, agent, judge_workers=judge_workers)
     print("Done Scoring Rows")
     print("Running Diversity Eval")
-    add_diversity(scored, method=dup_method)
+    group_histograms = add_diversity(scored, method=dup_method)
     print("Completed Diversity Eval")
     print(f"Writing results to output path: {out_path}")
     out_path = Path(out_path)
@@ -359,7 +490,10 @@ def run(
     print(f"Wrote aggregate summary to {summary_path}")
 
     if _WANDB_AVAILABLE and os.getenv("WANDB_MODE") != "disabled":
-        _log_to_wandb(model=model, summary=summary, scored=scored, step=step, wandb_group=wandb_group)
+        _log_to_wandb(
+            model=model, summary=summary, scored=scored, group_histograms=group_histograms,
+            step=step, wandb_group=wandb_group,
+        )
 
     return summary
 
@@ -381,6 +515,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--step", type=int, default=None, help="Checkpoint step, used as the wandb.log x-axis")
     parser.add_argument("--wandb-group", type=str, default="", help="wandb run group (e.g. the coevolve run abbr)")
+    parser.add_argument(
+        "--judge-workers", type=int, default=8,
+        help="concurrent judge API calls (score_generated_prompt is network-bound and independent per row)",
+    )
     args = parser.parse_args()
 
     if not args.dataset_repo and not args.local_path:
@@ -397,4 +535,5 @@ if __name__ == "__main__":
         step=args.step,
         wandb_group=args.wandb_group,
         dup_method=args.dup_method,
+        judge_workers=args.judge_workers,
     )
