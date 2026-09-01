@@ -5,28 +5,28 @@
 # Sized for CREATIVE_GPU="A100-40GB:2": verl trains on GPU 0
 # (n_gpus_per_node: 1), the vLLM solver oracle / prompt generation uses GPU 1.
 run:
-  abbr: 4b
+  abbr: 0.6b
   profile: smoke
   num_iters: 1
   experiment: challenger-analysis
 
 challenger:
-  model_path: Qwen/Qwen3-4B    # smallest Qwen3 — wiring validation, not quality
+  model_path: Qwen/Qwen3-0.6B    # smallest Qwen3 — wiring validation, not quality
   max_steps: 1
   rollout_n: 4                    # minimum meaningful group size
   num_train: 32
   num_val: 16
-  max_response_length: 2048
+  max_response_length: 4096
   solver_query:
-    max_tokens: 2048              # oracle responses don't need the full 32k budget here
+    max_tokens: 4096              # oracle responses don't need the full 32k budget here
 
 solver:
-  model_path: Qwen/Qwen3-4B
+  model_path: Qwen/Qwen3-0.6B
   max_steps: 2
   rollout_n: 2
   num_train: 2
   num_val: 1
-  max_response_length: 2048
+  max_response_length: 4096
 
 rewards:
   challenger:
