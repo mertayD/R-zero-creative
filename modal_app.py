@@ -537,17 +537,24 @@ def challenger_eval(
     step: int = 0,
     dup_method: str = "embedding",
 ):
-    """Trigger a challenger eval and block until it's done, printing the
-    aggregate summary — one command, immediate results, no separate polling
-    step:
+    """Trigger a challenger eval and submit it to run remotely, independent of
+    this local process:
 
-        modal run modal_app.py::challenger_eval --checkpoint /storage/models/<run>/global_step_120/actor/huggingface
+        modal run --detach modal_app.py::challenger_eval --checkpoint /storage/models/<run>/global_step_120/actor/huggingface
+
+    Uses `.spawn()` (not `.remote()`) so the eval keeps running on Modal even
+    if your laptop sleeps or the connection drops — a blocking `.remote()`
+    call is tied to this process's connection, and losing it cancels the
+    input server-side (the "Received a cancellation signal" warning).
+    Fetch the result later with:
+
+        modal run modal_app.py::challenger_eval_result --function-call-id <id>
 
     `--limit`/`--step` are CLI-friendly `int`s (0 = unset) since Modal's CLI
     arg parser doesn't take `Optional[int]`; both convert to `None` before
     reaching run_challenger_eval, which does take `int | None`.
     """
-    summary_json = run_challenger_eval.remote(
+    fc = run_challenger_eval.spawn(
         checkpoint,
         dataset_repo=dataset_repo,
         judge_type=judge_type,
@@ -556,7 +563,21 @@ def challenger_eval(
         wandb_group=os.environ.get("WANDB_RUN_GROUP", ""),
         dup_method=dup_method,
     )
-    print(summary_json)
+    print(f"=== Challenger eval submitted (function call: {fc.object_id}) ===")
+    print(f"    modal app logs {APP_NAME}   # to follow")
+    print(f"    modal run modal_app.py::challenger_eval_result --function-call-id {fc.object_id}   # to fetch the result")
+
+
+@app.local_entrypoint()
+def challenger_eval_result(function_call_id: str):
+    """Block until a challenger eval spawned by `challenger_eval` finishes,
+    then print its aggregate summary. Safe to re-run (e.g. after a dropped
+    connection) — reconnects to the same remote function call by id:
+
+        modal run modal_app.py::challenger_eval_result --function-call-id <id>
+    """
+    fc = modal.functions.FunctionCall.from_id(function_call_id)
+    print(fc.get())
 
 
 @app.local_entrypoint()
