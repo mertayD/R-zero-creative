@@ -351,7 +351,7 @@ def _rows_table(scored: list[dict]):
             r["format_valid"], r["format_failure_reason"], r["domain_adherence"],
             r["guidance_adherence"], r["criteria_quality"], r["judge_backend"],
             r["near_duplicate"],
-            "; ".join(r["near_duplicate_partners"]) if r["near_duplicate_partners"] else "",
+            "; ".join(str(p) for p in r["near_duplicate_partners"]) if r["near_duplicate_partners"] else "",
             r["near_duplicate_count"], r["near_duplicate_similarity"], r["group_self_bleu"],
             r["query"], json.dumps(r["criteria"]) if r["criteria"] is not None else "",
         )
