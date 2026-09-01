@@ -302,37 +302,33 @@ def _wandb_active() -> bool:
 
 
 def _flatten_summary(summary: dict) -> dict[str, float]:
-    """Flatten aggregate_rows()'s {overall, by_domain, by_subdomain} summary
-    into a flat metrics dict for wandb.log — `challenger_eval/overall/...`,
-    `challenger_eval/by_domain/<D>/...`. by_subdomain is deliberately left
-    out here (76 subdomains x ~8 stats would clutter the scalar-metrics
-    namespace) — it goes into a Table instead, see `_by_subdomain_table`.
-    Skips None values (wandb.log rejects them) and non-numeric fields."""
+    """Flatten aggregate_rows()'s overall stats into a flat metrics dict for
+    wandb.log — `challenger_eval/overall/...`. by_domain and by_subdomain are
+    deliberately left out here (per-group scalars spawn one panel each and
+    clutter the scalar-metrics namespace) — they go into Tables instead, see
+    `_group_stats_table`. Skips None values (wandb.log rejects them) and
+    non-numeric fields."""
     metrics: dict[str, float] = {}
-
-    def _add(prefix: str, stats: dict) -> None:
-        for key, value in stats.items():
-            if key == "format_failure_reason_counts":
-                for reason, count in value.items():
-                    metrics[f"{prefix}/format_failure_reason/{reason}"] = count
-            elif isinstance(value, (int, float)):
-                metrics[f"{prefix}/{key}"] = value
-
-    _add("challenger_eval/overall", summary["overall"])
-    for domain, stats in summary["by_domain"].items():
-        _add(f"challenger_eval/by_domain/{domain}", stats)
+    for key, value in summary["overall"].items():
+        if key == "format_failure_reason_counts":
+            for reason, count in value.items():
+                metrics[f"challenger_eval/overall/format_failure_reason/{reason}"] = count
+        elif isinstance(value, (int, float)):
+            metrics[f"challenger_eval/overall/{key}"] = value
     return metrics
 
 
-def _by_subdomain_table(summary: dict):
+def _group_stats_table(groups: dict[str, dict], key_column: str):
+    """One row per group (domain or subdomain), one column per stat — a
+    single Table panel instead of a scalar panel per group/stat pair."""
     columns = [
-        "subdomain", "n", "format_pass_rate", "domain_adherence_mean",
+        key_column, "n", "format_pass_rate", "domain_adherence_mean",
         "guidance_adherence_mean", "criteria_quality_mean", "duplicate_rate",
-        "query_len_mean", "criteria_len_mean",
+        "self_bleu_mean", "query_len_mean", "criteria_len_mean",
     ]
     table = _wandb.Table(columns=columns)
-    for subdomain, stats in summary["by_subdomain"].items():
-        table.add_data(*(stats.get(c) if c != "subdomain" else subdomain for c in columns))
+    for group_key, stats in groups.items():
+        table.add_data(*(stats.get(c) if c != key_column else group_key for c in columns))
     return table
 
 
@@ -381,20 +377,22 @@ def _histogram_image(values: list[float], title: str):
 def _similarity_histogram_table(group_histograms: dict[tuple[str, str], dict[str, list[float]]]):
     """One row per (domain, subdomain) group: pairwise cosine-similarity and
     pairwise Self-BLEU histograms rendered as images, plus each distribution's
-    pair count for context (a group with only 2-3 replicates gives a much
-    noisier histogram than one with 10)."""
+    mean as a sortable scalar summary of the group."""
     columns = [
-        "domain", "subdomain", "n_cosine_pairs", "cosine_similarity_hist",
-        "n_bleu_pairs", "self_bleu_hist",
+        "domain", "subdomain", "mean_cosine_score", "max_cosine_score", "cosine_similarity_hist",
+        "mean_bleu_score", "max_bleu_score", "self_bleu_hist",
     ]
     table = _wandb.Table(columns=columns)
     for (domain, subdomain), data in sorted(group_histograms.items()):
         cosine_sims = data["cosine_similarities"]
         bleu_scores = data["bleu_scores"]
         table.add_data(
-            domain, subdomain, len(cosine_sims),
+            domain, subdomain,
+            round(mean(cosine_sims), 3) if cosine_sims else None,
+            round(max(cosine_sims), 3) if cosine_sims else None,
             _histogram_image(cosine_sims, f"{domain}::{subdomain} cosine sim"),
-            len(bleu_scores),
+            round(mean(bleu_scores), 3) if bleu_scores else None,
+            round(max(bleu_scores), 3) if bleu_scores else None,
             _histogram_image(bleu_scores, f"{domain}::{subdomain} self-BLEU"),
         )
     return table
@@ -429,7 +427,8 @@ def _log_to_wandb(
         owned = True
 
     metrics = _flatten_summary(summary)
-    metrics["challenger_eval/by_subdomain"] = _by_subdomain_table(summary)
+    metrics["challenger_eval/by_domain"] = _group_stats_table(summary["by_domain"], "domain")
+    metrics["challenger_eval/by_subdomain"] = _group_stats_table(summary["by_subdomain"], "subdomain")
     metrics["challenger_eval/rows"] = _rows_table(scored)
     metrics["challenger_eval/similarity_histograms"] = _similarity_histogram_table(group_histograms)
     _wandb.log(metrics, step=step)
