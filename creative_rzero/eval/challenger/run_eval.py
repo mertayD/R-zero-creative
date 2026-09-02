@@ -141,6 +141,84 @@ def _generate(llm, tokenizer, rows: list[dict]) -> list[str]:
     return [c.outputs[0].text for c in completions]
 
 
+def _generate_tinker(rows: list[dict], model: str, hf_tokenizer: str = "",
+                     seed: int = 42, max_in_flight: int = 32) -> list[str]:
+    """Tinker-backend twin of `_load_model`+`_generate`: identical prompt
+    construction (chat template, thinking mode) and sampling regime
+    (temp 0.6 / top_p 0.95 / top_k 20), but sampling happens on Tinker's
+    servers — no local GPU, no vLLM import. One deliberate divergence:
+    <|im_end|> joins the stop set alongside eos, since Tinker bills per
+    generated token and a base model in a chat template that only stops on
+    <|endoftext|> can ramble to the 32k cap. Tokenizer runs locally
+    (`hf_tokenizer` defaults to the model id)."""
+    import tinker
+    from tinker import types as ttypes
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(hf_tokenizer or model)
+    MAX_WINDOW = 32768
+
+    def render(row):
+        chat = [
+            {"role": "system", "content": row["system_prompt"]},
+            {"role": "user", "content": row["user_prompt"]},
+        ]
+        if tokenizer.chat_template:
+            return tokenizer.apply_chat_template(
+                chat, tokenize=False, add_generation_prompt=True,
+                add_special_tokens=True, enable_thinking=True,
+            )
+        return f"system: {row['system_prompt']}\n\nuser: {row['user_prompt']}"
+
+    stop_ids = sorted({i for i in (tokenizer.eos_token_id,
+                                   tokenizer.convert_tokens_to_ids("<|im_end|>"))
+                       if isinstance(i, int) and i >= 0})
+    client = tinker.ServiceClient().create_sampling_client(base_model=model)
+
+    out: dict[int, str] = {}
+    attempts: dict[int, int] = {}
+    pending: dict = {}
+    order = list(range(len(rows)))
+    it = iter(order)
+
+    def submit(i):
+        ids = tokenizer(render(rows[i]), add_special_tokens=False).input_ids
+        params = ttypes.SamplingParams(
+            max_tokens=max(256, min(32768, MAX_WINDOW - len(ids) - 16)),
+            temperature=0.6, top_p=0.95, top_k=20, stop=stop_ids, seed=seed + i)
+        return client.sample(prompt=ttypes.ModelInput.from_ints(ids),
+                             num_samples=1, sampling_params=params)
+
+    from concurrent.futures import as_completed
+
+    def refill():
+        while len(pending) < max_in_flight:
+            i = next(it, None)
+            if i is None:
+                return
+            pending[submit(i)] = i
+
+    refill()
+    while pending:
+        for fut in as_completed(list(pending)):
+            i = pending.pop(fut)
+            try:
+                res = fut.result()
+                out[i] = tokenizer.decode(res.sequences[0].tokens, skip_special_tokens=True)
+                if len(out) % 25 == 0:
+                    print(f"[tinker-gen] {len(out)}/{len(rows)} sampled", flush=True)
+            except Exception as e:
+                attempts[i] = attempts.get(i, 0) + 1
+                if attempts[i] <= 3:
+                    print(f"[tinker-gen] row {i} attempt {attempts[i]} failed: {e!r} — retrying", flush=True)
+                    pending[submit(i)] = i
+                else:
+                    raise RuntimeError(f"tinker sampling failed for row {i} after 3 attempts") from e
+            refill()
+            break
+    return [out[i] for i in range(len(rows))]
+
+
 def _judge_one(agent, row: dict, query: str, criteria: list[dict], judge_retries: int) -> dict:
     """Run a single judge call and normalize both outcomes (parsed result or
     `JudgeParseError`) into the record-field subset `score_rows` merges in —
@@ -450,21 +528,28 @@ def run(
     wandb_group: str = "",
     dup_method: str = "embedding",
     judge_workers: int = 8,
+    gen_backend: str = "vllm",
+    hf_tokenizer: str = "",
 ) -> dict:
     rows = load_eval_set(dataset_repo, local_path, limit=limit)
 
-    llm, tokenizer = _load_model(model, seed=seed)
-    responses = _generate(llm, tokenizer, rows)
-    # Free vLLM's GPU reservation before scoring: the embedding dup detector
-    # loads Qwen3-Embedding-4B (~8GB) on the same device.
-    del llm
-    import gc
-    gc.collect()
-    try:
-        import torch
-        torch.cuda.empty_cache()
-    except ImportError:
-        pass
+    if gen_backend == "tinker":
+        responses = _generate_tinker(rows, model, hf_tokenizer=hf_tokenizer, seed=seed)
+    elif gen_backend == "vllm":
+        llm, tokenizer = _load_model(model, seed=seed)
+        responses = _generate(llm, tokenizer, rows)
+        # Free vLLM's GPU reservation before scoring: the embedding dup detector
+        # loads Qwen3-Embedding-4B (~8GB) on the same device.
+        del llm
+        import gc
+        gc.collect()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except ImportError:
+            pass
+    else:
+        raise ValueError(f"gen_backend={gen_backend!r} must be 'vllm' or 'tinker'")
 
 
     print("Initializing Claude Judge Agent")
@@ -515,6 +600,12 @@ if __name__ == "__main__":
     parser.add_argument("--step", type=int, default=None, help="Checkpoint step, used as the wandb.log x-axis")
     parser.add_argument("--wandb-group", type=str, default="", help="wandb run group (e.g. the coevolve run abbr)")
     parser.add_argument(
+        "--gen-backend", type=str, default="vllm", choices=("vllm", "tinker"),
+        help="where generation runs: local vLLM (GPU) or the Tinker sampling API",
+    )
+    parser.add_argument("--hf-tokenizer", type=str, default="",
+                        help="tinker backend: HF tokenizer id when it differs from --model")
+    parser.add_argument(
         "--judge-workers", type=int, default=8,
         help="concurrent judge API calls (score_generated_prompt is network-bound and independent per row)",
     )
@@ -535,4 +626,6 @@ if __name__ == "__main__":
         wandb_group=args.wandb_group,
         dup_method=args.dup_method,
         judge_workers=args.judge_workers,
+        gen_backend=args.gen_backend,
+        hf_tokenizer=args.hf_tokenizer,
     )

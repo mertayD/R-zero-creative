@@ -31,12 +31,15 @@ evaluation/writing_bench/
 │   ├── benchmark_all.jsonl
 │   └── requirement/{style,format,length}/...
 ├── generate_responses_vllm.py      vLLM batch driver (replaces upstream stub)
+├── generate_responses_tinker.py    same driver over the Tinker sampling API (no local GPU)
+├── summarize_scores.py             overall / per-domain means from a scores file (+ optional W&B)
 ├── prompt.py                       vendored verbatim
 ├── evaluate_benchmark.py           vendored verbatim
 ├── calculate_scores.py             vendored (one missing typing import added)
 └── evaluator/
     ├── __init__.py
     ├── critic.py                   vendored verbatim — local Qwen-7B critic path
+    ├── critic_server.py            HTTP client for the deployed critic (--evaluator critic-server)
     └── llm.py                      patched: Perplexity Gateway (Anthropic Messages) + PERPLEXITY_API_KEY
 ```
 
@@ -125,3 +128,32 @@ python evaluation/writing_bench/make_subsets.py \
 
 This will overwrite the committed `smoke50.jsonl` and `mid100.jsonl`. Don't run
 it casually — if the subset changes, prior runs are no longer comparable.
+
+## Running without a local GPU (Tinker + deployed critic)
+
+Generation goes through the Tinker sampling API and judging through the
+deployed critic endpoint, so the whole eval runs from a laptop:
+
+```bash
+export TINKER_API_KEY=...            # or `tinker auth login`
+export WB_CRITIC_URL=https://<workspace>--r-zero-creative-critic-judge-server.modal.run
+
+python evaluation/writing_bench/generate_responses_tinker.py \
+    --model Qwen/Qwen3.5-9B-Base \
+    --query_file evaluation/writing_bench/benchmark_query/benchmark_all.jsonl \
+    --output_file $OUT/responses/qwen3.5-9b-base/all.jsonl
+
+python evaluation/writing_bench/evaluate_benchmark.py --evaluator critic-server --workers 8 \
+    --query_criteria_file evaluation/writing_bench/benchmark_query/benchmark_all.jsonl \
+    --input_file $OUT/responses/qwen3.5-9b-base/all.jsonl \
+    --output_file $OUT/scores/qwen3.5-9b-base/all.jsonl
+
+python evaluation/writing_bench/summarize_scores.py \
+    --scores_file $OUT/scores/qwen3.5-9b-base/all.jsonl \
+    --benchmark_file evaluation/writing_bench/benchmark_query/benchmark_all.jsonl
+```
+
+`--workers N` judges N responses concurrently but commits results in input
+order, so the count-based resume of the vendored scorer still works. The
+critic-server path token-truncates over-length responses to the critic's
+context (the local-vLLM path did this implicitly).
