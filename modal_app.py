@@ -64,6 +64,15 @@ CRITIC_MODEL_ID              = "AQuarterMile/WritingBench-Critic-Model-Qwen-7B"
 CRITIC_SERVED_NAME           = os.getenv("CRITIC_SERVED_NAME", "writingbench-critic-qwen-7b")
 CRITIC_JUDGE_GPU             = os.getenv("CRITIC_JUDGE_GPU", "L4")
 CRITIC_JUDGE_SCALEDOWN_WINDOW_S = int(os.getenv("CRITIC_JUDGE_SCALEDOWN_WINDOW_S", "3600"))
+# Optional explicit context for the served critic. Unset = vLLM's own choice
+# (8192 on the L4 deployment). WritingBench judge prompts (16k-token responses
+# + long queries) need the model's full 32768, which the L4's KV budget can
+# hold at reduced concurrency.
+CRITIC_MAX_MODEL_LEN         = os.getenv("CRITIC_MAX_MODEL_LEN", "")
+# vLLM 0.9.1 clamps max_model_len to the tokenizer's model_max_length (8192 in
+# the critic's tokenizer_config.json) regardless of --max-model-len. Serving
+# with the identical base-Qwen2.5 tokenizer (uncapped) lifts that clamp.
+CRITIC_TOKENIZER             = os.getenv("CRITIC_TOKENIZER", "")
 
 # creative_rzero/eval/challenger — standalone challenger eval harness. One
 # GPU is enough (vLLM inference only, no training), so this gets its own
@@ -326,6 +335,9 @@ def run_challenger_eval(
     min_containers=0,               # scale to zero between runs — no GPU billed while idle
     max_containers=4,               # only one instance of the judge service is needed (TODO(dayanc): scale this when full run)
     scaledown_window=CRITIC_JUDGE_SCALEDOWN_WINDOW_S,
+    env={"CRITIC_MAX_MODEL_LEN": CRITIC_MAX_MODEL_LEN,   # resolved at deploy time; the container re-imports this module
+         "CRITIC_TOKENIZER": CRITIC_TOKENIZER,
+         "VLLM_ALLOW_LONG_MAX_MODEL_LEN": "1"},          # config-derived cap can sit below max_position_embeddings
     timeout=86400,
 )
 @modal.web_server(port=8000, startup_timeout=600)
@@ -360,6 +372,8 @@ def critic_judge_server():
         "--port", "8000",
         "--dtype", "auto",
         "--disable-log-requests",
+        *(["--max-model-len", CRITIC_MAX_MODEL_LEN] if CRITIC_MAX_MODEL_LEN else []),
+        *(["--tokenizer", CRITIC_TOKENIZER] if CRITIC_TOKENIZER else []),
     ])
 
 
